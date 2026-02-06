@@ -275,10 +275,10 @@ public class ContainerStateTracker implements StateTracker {
             logger.debug("Deleted blob '{}' from incoming container (with lease) after move to {}",
                     blobName, destinationName);
 
-            // Release the lease after the delete
+            // Stop the renewal timer. Do not call releaseLease() — deleting the blob
+            // implicitly releases its lease, and calling releaseLease() on a deleted blob
+            // throws BlobNotFound (404).
             lease.stopRenewal();
-            lease.releaseLease();
-            logger.debug("Released lease for blob '{}' after delete", blobName);
         } else {
             throw new IllegalStateException(
                     "No active lease found for blob '" + blobName

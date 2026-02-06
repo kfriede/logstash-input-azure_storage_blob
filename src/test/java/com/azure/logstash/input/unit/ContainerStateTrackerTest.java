@@ -222,9 +222,10 @@ public class ContainerStateTrackerTest {
                 eq(DeleteSnapshotsOptionType.INCLUDE),
                 conditionsCaptor.capture(), isNull(), any());
         assertEquals("lease-id-123", conditionsCaptor.getValue().getLeaseId());
-        // Lease released AFTER delete
+        // Only stopRenewal after delete — releaseLease is not called because
+        // deleting the blob implicitly releases its lease
         inOrder.verify(leaseManager).stopRenewal();
-        inOrder.verify(leaseManager).releaseLease();
+        verify(leaseManager, never()).releaseLease();
     }
 
     // -----------------------------------------------------------------------
@@ -288,9 +289,10 @@ public class ContainerStateTrackerTest {
                 eq(DeleteSnapshotsOptionType.INCLUDE),
                 conditionsCaptor.capture(), isNull(), any());
         assertEquals("lease-id-123", conditionsCaptor.getValue().getLeaseId());
-        // Lease released AFTER delete
+        // Only stopRenewal after delete — releaseLease is not called because
+        // deleting the blob implicitly releases its lease
         inOrder.verify(leaseManager).stopRenewal();
-        inOrder.verify(leaseManager).releaseLease();
+        verify(leaseManager, never()).releaseLease();
     }
 
     // -----------------------------------------------------------------------

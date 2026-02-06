@@ -99,10 +99,10 @@ public class ContainerGovOT extends AzureGovTestBase {
         assertEquals("data\n", content);
     }
 
-    // ── Test 3: Missing archive container fails ─────────────────────────────
+    // ── Test 3: Missing archive container routes blob to errors ─────────────
 
     @Test
-    public void testMissingArchiveContainerFails() {
+    public void testMissingArchiveContainerRoutesToErrors() {
         uploadBlob("incoming", "missing-archive.log", "data\n");
 
         // Use a non-existent archive container name
@@ -114,19 +114,24 @@ public class ContainerGovOT extends AzureGovTestBase {
         BlobPoller poller = new BlobPoller(incomingClient, tracker, processor,
                 events::add, "", 50);
 
-        // filterCandidates lists the archive container to build the exclusion set.
-        // When the archive container doesn't exist, Azure returns 404 (ContainerNotFound).
-        // This exception propagates from pollOnce since BlobPoller does not catch
-        // errors from filterCandidates — it is a configuration error.
-        try {
-            poller.pollOnce(() -> false);
-            fail("Should have thrown BlobStorageException for missing archive container");
-        } catch (BlobStorageException e) {
-            assertEquals("Should be a 404 ContainerNotFound", 404, e.getStatusCode());
-        }
+        // With per-blob existence checks in filterCandidates, a non-existent archive
+        // container no longer causes an immediate error (exists() returns false for
+        // blobs in missing containers). Instead, the blob passes filtering, gets
+        // processed, then markCompleted fails (copy to non-existent container).
+        // BlobPoller catches this and routes the blob to the error container.
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(() -> false);
 
-        // The blob should remain in incoming (not lost)
-        assertTrue("Blob should still be in incoming",
-                listBlobNames("incoming").contains("missing-archive.log"));
+        assertEquals("Blob should be counted as failed", 1, summary.getBlobsFailed());
+        assertEquals("No blobs should be marked processed", 0, summary.getBlobsProcessed());
+
+        // The blob should be in the error container (routed there by markFailed)
+        List<String> errorBlobs = listBlobNames("errors");
+        assertTrue("Blob should be routed to error container",
+                errorBlobs.contains("missing-archive.log"));
+
+        // The blob should not remain in incoming
+        List<String> incomingBlobs = listBlobNames("incoming");
+        assertFalse("Blob should not be in incoming after error routing",
+                incomingBlobs.contains("missing-archive.log"));
     }
 }
