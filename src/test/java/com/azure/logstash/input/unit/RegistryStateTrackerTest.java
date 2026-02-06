@@ -117,7 +117,29 @@ public class RegistryStateTrackerTest {
     }
 
     // -----------------------------------------------------------------------
-    // 5. claim inserts a processing record
+    // 5. filterCandidates excludes "processing" blobs (crash recovery)
+    // -----------------------------------------------------------------------
+    @Test
+    public void testFilterCandidatesExcludesProcessing() throws Exception {
+        // Insert a processing record directly (simulates a crash leaving a blob in processing state)
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+             Statement stmt = conn.createStatement()) {
+            stmt.executeUpdate(
+                    "INSERT INTO blobs (blob_name, status, started_at, processor) "
+                            + "VALUES ('crashed-blob', 'processing', '2024-01-01T00:00:00Z', 'old-processor')");
+        }
+
+        BlobItem processingBlob = new BlobItem().setName("crashed-blob");
+        BlobItem newBlob = new BlobItem().setName("new-blob");
+        List<BlobItem> candidates = tracker.filterCandidates(Arrays.asList(processingBlob, newBlob));
+
+        assertEquals("Only new-blob should be returned, processing blob should be excluded",
+                1, candidates.size());
+        assertEquals("new-blob", candidates.get(0).getName());
+    }
+
+    // -----------------------------------------------------------------------
+    // 6. claim inserts a processing record
     // -----------------------------------------------------------------------
     @Test
     public void testClaimInsertsProcessingRecord() throws Exception {

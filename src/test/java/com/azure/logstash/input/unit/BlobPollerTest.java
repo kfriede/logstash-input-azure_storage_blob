@@ -267,7 +267,37 @@ public class BlobPollerTest {
     }
 
     // -----------------------------------------------------------------------
-    // 8. testEmptyContainerNoop — no blobs → summary all zeros, no errors
+    // 8. testStoppedMidBlobMarkedFailed — blob stopped mid-processing → markFailed with "interrupted"
+    // -----------------------------------------------------------------------
+    @Test
+    public void testStoppedMidBlobMarkedFailed() throws IOException {
+        List<BlobItem> blobs = createBlobItems("mid-stop.log");
+        mockListBlobs(blobs);
+
+        when(stateTracker.filterCandidates(any())).thenReturn(blobs);
+        when(stateTracker.claim("mid-stop.log")).thenReturn(true);
+        when(containerClient.getBlobClient("mid-stop.log")).thenReturn(mock(BlobClient.class));
+
+        // Processor returns incomplete (stopped mid-blob): isCompleted = false, 3 events produced
+        when(processor.process(any(BlobClient.class), any(Consumer.class), any(Supplier.class)))
+                .thenReturn(new BlobProcessor.ProcessResult(3, false));
+
+        BlobPoller poller = createPoller("", 10);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        // Should be counted as failed, not processed
+        assertEquals(0, summary.getBlobsProcessed());
+        assertEquals(1, summary.getBlobsFailed());
+        assertEquals(3, summary.getEventsProduced());
+        // markFailed should be called with "interrupted"
+        verify(stateTracker).markFailed("mid-stop.log", "interrupted");
+        verify(stateTracker, never()).markCompleted(anyString());
+        // release should still be called (finally block)
+        verify(stateTracker).release("mid-stop.log");
+    }
+
+    // -----------------------------------------------------------------------
+    // 9. testEmptyContainerNoop — no blobs → summary all zeros, no errors
     // -----------------------------------------------------------------------
     @Test
     public void testEmptyContainerNoop() throws IOException {

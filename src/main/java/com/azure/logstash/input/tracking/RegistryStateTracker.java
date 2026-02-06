@@ -49,8 +49,8 @@ public class RegistryStateTracker implements StateTracker {
     private static final String CREATE_INDEX_SQL =
             "CREATE INDEX IF NOT EXISTS idx_status ON blobs(status)";
 
-    private static final String SELECT_COMPLETED_SQL =
-            "SELECT blob_name FROM blobs WHERE status = 'completed'";
+    private static final String SELECT_EXCLUDED_SQL =
+            "SELECT blob_name FROM blobs WHERE status IN ('completed', 'processing')";
 
     private static final String INSERT_CLAIM_SQL =
             "INSERT OR IGNORE INTO blobs (blob_name, status, started_at, processor) "
@@ -93,14 +93,15 @@ public class RegistryStateTracker implements StateTracker {
     }
 
     /**
-     * Returns blobs whose names are NOT in the completed set. Failed blobs ARE included
-     * as candidates for reprocessing.
+     * Returns blobs whose names are NOT in the excluded set. Both completed blobs
+     * and blobs still in "processing" state (from a crashed previous run) are excluded.
+     * Failed blobs ARE included as candidates for reprocessing.
      */
     @Override
     public List<BlobItem> filterCandidates(List<BlobItem> blobs) {
         Set<String> completed = new HashSet<>();
         try (Statement stmt = connection.createStatement();
-             ResultSet rs = stmt.executeQuery(SELECT_COMPLETED_SQL)) {
+             ResultSet rs = stmt.executeQuery(SELECT_EXCLUDED_SQL)) {
             while (rs.next()) {
                 completed.add(rs.getString("blob_name"));
             }

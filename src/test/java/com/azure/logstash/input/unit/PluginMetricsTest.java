@@ -3,8 +3,6 @@ package com.azure.logstash.input.unit;
 import com.azure.logstash.input.PluginMetrics;
 import org.junit.Test;
 
-import java.util.List;
-
 import static org.junit.Assert.*;
 
 /**
@@ -86,18 +84,4 @@ public class PluginMetricsTest {
         assertEquals(3, metrics.getActiveLeaseCount());
     }
 
-    // -----------------------------------------------------------------------
-    // 7. recordBlobProcessingTime — record 2.5 and 3.0, verify both recorded
-    // -----------------------------------------------------------------------
-    @Test
-    public void testRecordBlobProcessingTime() {
-        PluginMetrics metrics = new PluginMetrics();
-        assertTrue(metrics.getBlobProcessingTimes().isEmpty());
-        metrics.recordBlobProcessingTime(2.5);
-        metrics.recordBlobProcessingTime(3.0);
-        List<Double> times = metrics.getBlobProcessingTimes();
-        assertEquals(2, times.size());
-        assertEquals(2.5, times.get(0), 0.001);
-        assertEquals(3.0, times.get(1), 0.001);
-    }
 }

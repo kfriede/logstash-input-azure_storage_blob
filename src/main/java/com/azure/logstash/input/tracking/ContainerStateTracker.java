@@ -247,17 +247,26 @@ public class ContainerStateTracker implements StateTracker {
         poller.waitForCompletion();
         logger.debug("Copied blob '{}' to {} container", blobName, destinationName);
 
-        // Release the lease before deleting from incoming
+        // Delete from incoming while the lease is still held to prevent another
+        // consumer from acquiring the lease between release and delete (race condition).
         LeaseManager lease = activeLeases.remove(blobName);
         if (lease != null) {
+            BlobRequestConditions leaseCondition = new BlobRequestConditions()
+                    .setLeaseId(lease.getLeaseId());
+            sourceBlobClient.deleteWithResponse(DeleteSnapshotsOptionType.INCLUDE,
+                    leaseCondition, null, com.azure.core.util.Context.NONE);
+            logger.debug("Deleted blob '{}' from incoming container (with lease) after move to {}",
+                    blobName, destinationName);
+
+            // Release the lease after the delete
             lease.stopRenewal();
             lease.releaseLease();
-            logger.debug("Released lease for blob '{}' before delete", blobName);
+            logger.debug("Released lease for blob '{}' after delete", blobName);
+        } else {
+            // No active lease — fall back to unconditional delete
+            sourceBlobClient.delete();
+            logger.debug("Deleted blob '{}' from incoming container (no lease) after move to {}",
+                    blobName, destinationName);
         }
-
-        // Delete from incoming — only after copy is confirmed complete and lease released
-        sourceBlobClient.delete();
-        logger.debug("Deleted blob '{}' from incoming container after move to {}",
-                blobName, destinationName);
     }
 }

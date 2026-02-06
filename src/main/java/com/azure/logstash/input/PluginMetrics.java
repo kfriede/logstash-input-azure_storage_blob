@@ -1,8 +1,5 @@
 package com.azure.logstash.input;
 
-import java.util.Collections;
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -22,7 +19,6 @@ public class PluginMetrics {
     private final AtomicLong eventsProduced = new AtomicLong();
     private volatile double pollCycleDuration;
     private final AtomicInteger activeLeaseCount = new AtomicInteger();
-    private final List<Double> blobProcessingTimes = new CopyOnWriteArrayList<>();
 
     // -- Mutators -----------------------------------------------------------
 
@@ -50,10 +46,6 @@ public class PluginMetrics {
         activeLeaseCount.set(count);
     }
 
-    public void recordBlobProcessingTime(double seconds) {
-        blobProcessingTimes.add(seconds);
-    }
-
     // -- Accessors ----------------------------------------------------------
 
     public long getBlobsProcessed() {
@@ -78,12 +70,5 @@ public class PluginMetrics {
 
     public int getActiveLeaseCount() {
         return activeLeaseCount.get();
-    }
-
-    /**
-     * Returns an unmodifiable snapshot of recorded blob processing times.
-     */
-    public List<Double> getBlobProcessingTimes() {
-        return Collections.unmodifiableList(blobProcessingTimes);
     }
 }

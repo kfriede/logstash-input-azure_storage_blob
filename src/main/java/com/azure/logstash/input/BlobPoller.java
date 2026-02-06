@@ -135,8 +135,9 @@ public class BlobPoller {
                     blobsProcessed++;
                     eventsProduced += result.getEventCount();
                 } else {
-                    // Stopped mid-blob — don't mark completed or failed
-                    blobsProcessed++;
+                    // Stopped mid-blob — mark as failed with "interrupted" per design doc
+                    stateTracker.markFailed(blobName, "interrupted");
+                    blobsFailed++;
                     eventsProduced += result.getEventCount();
                 }
             } catch (Exception e) {

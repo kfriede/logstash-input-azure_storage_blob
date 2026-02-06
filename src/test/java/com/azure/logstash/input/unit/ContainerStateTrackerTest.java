@@ -13,10 +13,13 @@ import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.models.BlobCopyInfo;
 import com.azure.storage.blob.models.BlobItem;
+import com.azure.storage.blob.models.BlobRequestConditions;
 import com.azure.storage.blob.models.BlobStorageException;
+import com.azure.storage.blob.models.DeleteSnapshotsOptionType;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
 import java.time.Duration;
@@ -171,9 +174,10 @@ public class ContainerStateTrackerTest {
     // 5. markCompleted copies to archive then deletes from incoming
     // -----------------------------------------------------------------------
     @Test
-    public void testMarkCompletedCopiesThenDeletes() {
+    public void testMarkCompletedCopiesThenDeletesWithLeaseThenReleases() {
         // First claim the blob
         when(leaseManager.acquireLease()).thenReturn("lease-id-123");
+        when(leaseManager.getLeaseId()).thenReturn("lease-id-123");
         tracker.claim("test-blob");
 
         // Set up copy mocks
@@ -185,13 +189,20 @@ public class ContainerStateTrackerTest {
 
         tracker.markCompleted("test-blob");
 
-        // Verify order: beginCopy to archive, then release lease, then delete from incoming
-        InOrder inOrder = inOrder(archiveBlobClient, poller, leaseManager, incomingBlobClient);
+        // Verify order: beginCopy to archive, then delete with lease condition, then release lease
+        InOrder inOrder = inOrder(archiveBlobClient, poller, incomingBlobClient, leaseManager);
         inOrder.verify(archiveBlobClient).beginCopy(eq(sourceUrl), isNull());
         inOrder.verify(poller).waitForCompletion();
+        // Delete should happen BEFORE lease release, with lease condition
+        ArgumentCaptor<BlobRequestConditions> conditionsCaptor =
+                ArgumentCaptor.forClass(BlobRequestConditions.class);
+        inOrder.verify(incomingBlobClient).deleteWithResponse(
+                eq(DeleteSnapshotsOptionType.INCLUDE),
+                conditionsCaptor.capture(), isNull(), any());
+        assertEquals("lease-id-123", conditionsCaptor.getValue().getLeaseId());
+        // Lease released AFTER delete
         inOrder.verify(leaseManager).stopRenewal();
         inOrder.verify(leaseManager).releaseLease();
-        inOrder.verify(incomingBlobClient).delete();
     }
 
     // -----------------------------------------------------------------------
@@ -209,6 +220,7 @@ public class ContainerStateTrackerTest {
 
         // Claim with the nested path
         when(leaseManager.acquireLease()).thenReturn("lease-id-123");
+        when(leaseManager.getLeaseId()).thenReturn("lease-id-123");
         tracker.claim(nestedBlobName);
 
         String sourceUrl = "https://account.blob.core.windows.net/incoming/logs/2026/server.log";
@@ -228,9 +240,10 @@ public class ContainerStateTrackerTest {
     // 7. markFailed copies to error container then deletes from incoming
     // -----------------------------------------------------------------------
     @Test
-    public void testMarkFailedCopiesToErrorContainer() {
+    public void testMarkFailedCopiesToErrorContainerDeletesWithLeaseThenReleases() {
         // First claim the blob
         when(leaseManager.acquireLease()).thenReturn("lease-id-123");
+        when(leaseManager.getLeaseId()).thenReturn("lease-id-123");
         tracker.claim("test-blob");
 
         // Set up copy mocks for error container
@@ -242,12 +255,20 @@ public class ContainerStateTrackerTest {
 
         tracker.markFailed("test-blob", "something went wrong");
 
-        // Verify copy to error container and delete from incoming
-        verify(errorBlobClient).beginCopy(eq(sourceUrl), isNull());
-        verify(poller).waitForCompletion();
-        verify(incomingBlobClient).delete();
-        verify(leaseManager).stopRenewal();
-        verify(leaseManager).releaseLease();
+        // Verify order: copy to error container, delete with lease, then release lease
+        InOrder inOrder = inOrder(errorBlobClient, poller, incomingBlobClient, leaseManager);
+        inOrder.verify(errorBlobClient).beginCopy(eq(sourceUrl), isNull());
+        inOrder.verify(poller).waitForCompletion();
+        // Delete should happen BEFORE lease release, with lease condition
+        ArgumentCaptor<BlobRequestConditions> conditionsCaptor =
+                ArgumentCaptor.forClass(BlobRequestConditions.class);
+        inOrder.verify(incomingBlobClient).deleteWithResponse(
+                eq(DeleteSnapshotsOptionType.INCLUDE),
+                conditionsCaptor.capture(), isNull(), any());
+        assertEquals("lease-id-123", conditionsCaptor.getValue().getLeaseId());
+        // Lease released AFTER delete
+        inOrder.verify(leaseManager).stopRenewal();
+        inOrder.verify(leaseManager).releaseLease();
     }
 
     // -----------------------------------------------------------------------
@@ -277,6 +298,7 @@ public class ContainerStateTrackerTest {
 
         // Verify delete was NOT called — blob stays in incoming
         verify(incomingBlobClient, never()).delete();
+        verify(incomingBlobClient, never()).deleteWithResponse(any(), any(), any(), any());
     }
 
     // -----------------------------------------------------------------------
