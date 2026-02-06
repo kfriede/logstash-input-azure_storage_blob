@@ -338,4 +338,51 @@ public class TagStateTrackerTest {
         // Since we can't easily verify map removal directly, we just verify
         // the stop/release calls happened
     }
+
+    // -----------------------------------------------------------------------
+    // 13. markFailed sanitizes tag-unsafe characters from error message
+    // -----------------------------------------------------------------------
+    @Test
+    public void testMarkFailedSanitizesTagUnsafeCharacters() {
+        when(blobClient.getTags()).thenReturn(new HashMap<>());
+
+        // Error with characters invalid in Azure tag values
+        String unsafeError = "Error: <xml>&\"special\nchars\ttab";
+
+        tracker.markFailed("test-blob", unsafeError);
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Map<String, String>> tagsCaptor =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(blobClient).setTags(tagsCaptor.capture());
+
+        String sanitized = tagsCaptor.getValue().get("logstash_error");
+        assertFalse("Should not contain '<'", sanitized.contains("<"));
+        assertFalse("Should not contain '>'", sanitized.contains(">"));
+        assertFalse("Should not contain '&'", sanitized.contains("&"));
+        assertFalse("Should not contain '\"'", sanitized.contains("\""));
+        assertFalse("Should not contain newline", sanitized.contains("\n"));
+        assertFalse("Should not contain tab", sanitized.contains("\t"));
+        assertTrue("Should preserve 'Error'", sanitized.contains("Error"));
+        assertTrue("Should preserve 'special'", sanitized.contains("special"));
+    }
+
+    // -----------------------------------------------------------------------
+    // 14. markFailed handles null error message
+    // -----------------------------------------------------------------------
+    @Test
+    public void testMarkFailedHandlesNullError() {
+        when(blobClient.getTags()).thenReturn(new HashMap<>());
+
+        tracker.markFailed("test-blob", null);
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Map<String, String>> tagsCaptor =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(blobClient).setTags(tagsCaptor.capture());
+
+        String error = tagsCaptor.getValue().get("logstash_error");
+        // null error should be stored as empty string or "unknown", not cause NPE
+        assertNotNull("Error tag should not be null", error);
+    }
 }

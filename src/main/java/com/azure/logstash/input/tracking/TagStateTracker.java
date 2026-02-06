@@ -233,9 +233,12 @@ public class TagStateTracker implements StateTracker {
         Map<String, String> existingTags = blobClient.getTags();
         Map<String, String> mergedTags = new HashMap<>(existingTags);
 
-        String truncatedError = error;
-        if (error != null && error.length() > MAX_ERROR_LENGTH) {
-            truncatedError = error.substring(0, MAX_ERROR_LENGTH);
+        String truncatedError = error != null ? error : "unknown";
+        // Azure Blob Index Tag values only allow: alphanumeric, space, +, -, ., :, =, _
+        // Replace any disallowed characters with underscore, then truncate.
+        truncatedError = truncatedError.replaceAll("[^a-zA-Z0-9 +\\-./:=_]", "_");
+        if (truncatedError.length() > MAX_ERROR_LENGTH) {
+            truncatedError = truncatedError.substring(0, MAX_ERROR_LENGTH);
         }
 
         mergedTags.put(TAG_STATUS, STATUS_FAILED);
