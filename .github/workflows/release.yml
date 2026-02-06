@@ -31,10 +31,10 @@ jobs:
 
       - name: Download Logstash build support files
         run: |
-          LS_VERSION=$(dpkg-query -W -f='${Version}' logstash | sed 's/^1://')
+          LS_VERSION=$(dpkg-query -W -f='${Version}' logstash | sed 's/^1://; s/-[0-9]*$//')
           echo "Logstash version: ${LS_VERSION}"
-          sudo curl -sL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/rubyUtils.gradle" -o /usr/share/logstash/rubyUtils.gradle
-          sudo curl -sL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/versions.yml" -o /usr/share/logstash/versions.yml
+          sudo curl -sfL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/rubyUtils.gradle" -o /usr/share/logstash/rubyUtils.gradle
+          sudo curl -sfL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/versions.yml" -o /usr/share/logstash/versions.yml
 
       - name: Run unit tests
         run: ./gradlew test
@@ -65,10 +65,10 @@ jobs:
 
       - name: Download Logstash build support files
         run: |
-          LS_VERSION=$(dpkg-query -W -f='${Version}' logstash | sed 's/^1://')
+          LS_VERSION=$(dpkg-query -W -f='${Version}' logstash | sed 's/^1://; s/-[0-9]*$//')
           echo "Logstash version: ${LS_VERSION}"
-          sudo curl -sL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/rubyUtils.gradle" -o /usr/share/logstash/rubyUtils.gradle
-          sudo curl -sL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/versions.yml" -o /usr/share/logstash/versions.yml
+          sudo curl -sfL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/rubyUtils.gradle" -o /usr/share/logstash/rubyUtils.gradle
+          sudo curl -sfL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/versions.yml" -o /usr/share/logstash/versions.yml
 
       - name: Validate tag matches VERSION
         run: |
