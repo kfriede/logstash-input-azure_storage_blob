@@ -114,10 +114,8 @@ public class ContainerStateTrackerTest {
     // -----------------------------------------------------------------------
     @Test
     public void testFilterCandidatesExcludesAlreadyInArchive() {
-        // "a.log" exists in both incoming and archive
-        BlobItem archiveBlob = blobItem("a.log");
-        PagedIterable<BlobItem> archiveList = mockPagedIterable(archiveBlob);
-        when(archiveContainerClient.listBlobs()).thenReturn(archiveList);
+        // "a.log" exists in archive
+        when(archiveBlobClient.exists()).thenReturn(true);
 
         BlobItem incomingBlob = blobItem("a.log");
         List<BlobItem> candidates = tracker.filterCandidates(
@@ -131,9 +129,8 @@ public class ContainerStateTrackerTest {
     // -----------------------------------------------------------------------
     @Test
     public void testFilterCandidatesIncludesNew() {
-        // archive is empty
-        PagedIterable<BlobItem> emptyArchive = mockPagedIterable();
-        when(archiveContainerClient.listBlobs()).thenReturn(emptyArchive);
+        // "b.log" does NOT exist in archive
+        when(archiveBlobClient.exists()).thenReturn(false);
 
         BlobItem incomingBlob = blobItem("b.log");
         List<BlobItem> candidates = tracker.filterCandidates(
@@ -141,6 +138,31 @@ public class ContainerStateTrackerTest {
 
         assertEquals("New blob should be included", 1, candidates.size());
         assertEquals("b.log", candidates.get(0).getName());
+    }
+
+    // -----------------------------------------------------------------------
+    // 2b. filterCandidates uses per-blob existence checks, not full listing
+    // -----------------------------------------------------------------------
+    @Test
+    public void testFilterCandidatesUsesExistenceCheckNotListing() {
+        // Set up per-blob existence results
+        BlobClient archiveNewBlob = mock(BlobClient.class);
+        BlobClient archiveArchivedBlob = mock(BlobClient.class);
+        when(archiveContainerClient.getBlobClient("new-blob.log")).thenReturn(archiveNewBlob);
+        when(archiveContainerClient.getBlobClient("archived-blob.log")).thenReturn(archiveArchivedBlob);
+        when(archiveNewBlob.exists()).thenReturn(false);
+        when(archiveArchivedBlob.exists()).thenReturn(true);
+
+        BlobItem blob1 = blobItem("new-blob.log");
+        BlobItem blob2 = blobItem("archived-blob.log");
+        List<BlobItem> candidates = tracker.filterCandidates(Arrays.asList(blob1, blob2));
+
+        assertEquals("Only non-archived blob should be a candidate", 1, candidates.size());
+        assertEquals("new-blob.log", candidates.get(0).getName());
+
+        // Verify listBlobs was NOT called (old behavior)
+        verify(archiveContainerClient, never()).listBlobs();
+        verify(archiveContainerClient, never()).listBlobs(any(), any());
     }
 
     // -----------------------------------------------------------------------

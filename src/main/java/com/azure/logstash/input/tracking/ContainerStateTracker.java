@@ -13,7 +13,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -120,21 +119,22 @@ public class ContainerStateTracker implements StateTracker {
     /**
      * Filters blobs to include only those eligible for processing.
      *
-     * <p>Lists all blobs in the archive container and builds a set of their names.
-     * Returns only blobs whose names are NOT in the archive set. This handles the
-     * crash recovery case: if a blob exists in both incoming and archive, the copy
-     * completed but the delete did not — the blob was already processed, so skip it.
+     * <p>For each incoming blob, performs a per-blob HEAD request
+     * ({@code BlobClient.exists()}) against the archive container to check
+     * whether the blob has already been processed. This avoids listing the
+     * entire archive container, which would cause linear memory and latency
+     * growth as the archive grows over time.
+     *
+     * <p>This handles the crash recovery case: if a blob exists in both
+     * incoming and archive, the copy completed but the delete did not —
+     * the blob was already processed, so skip it.
      */
     @Override
     public List<BlobItem> filterCandidates(List<BlobItem> blobs) {
-        Set<String> archivedNames = new HashSet<>();
-        for (BlobItem archived : archiveContainerClient.listBlobs()) {
-            archivedNames.add(archived.getName());
-        }
-
         List<BlobItem> candidates = new ArrayList<>();
         for (BlobItem blob : blobs) {
-            if (archivedNames.contains(blob.getName())) {
+            BlobClient archiveBlob = archiveContainerClient.getBlobClient(blob.getName());
+            if (archiveBlob.exists()) {
                 logger.debug("Excluding blob '{}' — already exists in archive container",
                         blob.getName());
             } else {
