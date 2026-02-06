@@ -14,6 +14,7 @@ buildscript {
 plugins {
   id 'com.github.johnrengelman.shadow' version '8.1.1'
   id 'java'
+  id 'org.cyclonedx.bom' version '1.10.0'
 }
 
 ext {
