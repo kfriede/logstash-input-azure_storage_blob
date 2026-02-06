@@ -65,7 +65,9 @@ dependencies {
     // SQLite for registry strategy
     implementation 'org.xerial:sqlite-jdbc:3.47.2.0'
 
-    // Logging — included in shadow JAR for plugin validation; Logstash provides its own at runtime
+    // Logging — implementation scope so validatePluginJar can load the plugin
+    // class from the shadow JAR (static Logger field triggers class loading).
+    // Logstash provides its own Log4j at runtime; the duplicate is harmless.
     implementation 'org.apache.logging.log4j:log4j-api:2.17.0'
     implementation 'org.apache.logging.log4j:log4j-core:2.17.0'
 
@@ -75,8 +77,7 @@ dependencies {
     // Test dependencies
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.mockito:mockito-core:5.14.0'
-    testRuntimeOnly 'org.apache.logging.log4j:log4j-api:2.17.0'
-    testRuntimeOnly 'org.apache.logging.log4j:log4j-core:2.17.0'
+    // testRuntimeOnly for log4j not needed — already 'implementation' above
     testImplementation "org.jruby:jruby-complete:${gradle.ext.versions.jruby.version}"
 }
 
