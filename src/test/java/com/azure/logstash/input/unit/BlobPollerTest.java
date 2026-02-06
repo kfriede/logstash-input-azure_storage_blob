@@ -8,6 +8,8 @@ import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.models.BlobItem;
 import com.azure.storage.blob.models.ListBlobsOptions;
 import com.azure.core.http.rest.PagedIterable;
+import com.azure.core.http.rest.PagedResponse;
+import com.azure.core.util.IterableStream;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
@@ -73,7 +75,13 @@ public class BlobPollerTest {
     @SuppressWarnings("unchecked")
     private void mockListBlobs(List<BlobItem> items) {
         PagedIterable<BlobItem> pagedIterable = mock(PagedIterable.class);
-        when(pagedIterable.stream()).thenReturn(items.stream());
+
+        PagedResponse<BlobItem> page = mock(PagedResponse.class);
+        when(page.getValue()).thenReturn(items);
+
+        when(pagedIterable.iterableByPage())
+                .thenReturn(new IterableStream<>(Collections.singletonList(page)));
+
         when(containerClient.listBlobs(any(ListBlobsOptions.class), any()))
                 .thenReturn(pagedIterable);
     }
@@ -254,9 +262,10 @@ public class BlobPollerTest {
         mockProcessSuccess(5);
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        // isStopped: false for first blob, then true
+        // isStopped: false for page-level check and first blob, then true
+        // The paginated poller checks isStopped at the page level and before each blob
         AtomicInteger checkCount = new AtomicInteger(0);
-        Supplier<Boolean> isStopped = () -> checkCount.incrementAndGet() > 1;
+        Supplier<Boolean> isStopped = () -> checkCount.incrementAndGet() > 2;
 
         BlobPoller poller = createPoller("", 10);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(isStopped);
@@ -316,14 +325,14 @@ public class BlobPollerTest {
     }
 
     // -----------------------------------------------------------------------
-    // 9. testLexicographicOrder — blobs listed as [c, a, b] → processed in order a, b, c
+    // 9. testProcessedInApiReturnOrder — blobs processed in the order the API returns them
     // -----------------------------------------------------------------------
     @Test
-    public void testLexicographicOrder() throws IOException {
-        List<BlobItem> blobs = createBlobItems("c.log", "a.log", "b.log");
+    public void testProcessedInApiReturnOrder() throws IOException {
+        // API returns blobs in this order (Azure returns lexicographically)
+        List<BlobItem> blobs = createBlobItems("a.log", "b.log", "c.log");
         mockListBlobs(blobs);
 
-        // Return the list as-is from filterCandidates (order should already be sorted by poller)
         when(stateTracker.filterCandidates(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(stateTracker.claim(anyString())).thenReturn(true);
         mockProcessSuccess(1);
@@ -332,7 +341,7 @@ public class BlobPollerTest {
         BlobPoller poller = createPoller("", 10);
         poller.pollOnce(notStopped);
 
-        // Verify claim order is lexicographic: a, b, c
+        // Verify processing follows API return order
         InOrder inOrder = inOrder(stateTracker);
         inOrder.verify(stateTracker).claim("a.log");
         inOrder.verify(stateTracker).claim("b.log");
