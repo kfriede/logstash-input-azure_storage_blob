@@ -340,7 +340,64 @@ public class BlobPollerTest {
     }
 
     // -----------------------------------------------------------------------
-    // 10. testPollCycleReturnsSummary — verify summary fields: processed, failed, skipped, events, duration > 0
+    // 10. testLeaseRenewalFailureMarksFailedInsteadOfCompleted — wasLeaseRenewalFailed returns true
+    // -----------------------------------------------------------------------
+    @Test
+    public void testLeaseRenewalFailureMarksFailedInsteadOfCompleted() throws IOException {
+        List<BlobItem> blobs = createBlobItems("compromised.log");
+        mockListBlobs(blobs);
+
+        when(stateTracker.filterCandidates(any())).thenReturn(blobs);
+        when(stateTracker.claim("compromised.log")).thenReturn(true);
+        mockProcessSuccess(10);
+        when(containerClient.getBlobClient("compromised.log")).thenReturn(mock(BlobClient.class));
+
+        // Simulate lease renewal failure during processing
+        when(stateTracker.wasLeaseRenewalFailed("compromised.log")).thenReturn(true);
+
+        BlobPoller poller = createPoller("", 10);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        // Should be counted as failed, not processed
+        assertEquals(0, summary.getBlobsProcessed());
+        assertEquals(1, summary.getBlobsFailed());
+        assertEquals(10, summary.getEventsProduced());
+        // markFailed should be called, NOT markCompleted
+        verify(stateTracker).markFailed("compromised.log", "lease renewal failed during processing");
+        verify(stateTracker, never()).markCompleted(anyString());
+        // release should still be called (finally block)
+        verify(stateTracker).release("compromised.log");
+    }
+
+    // -----------------------------------------------------------------------
+    // 11. testNoLeaseRenewalFailureMarksCompleted — wasLeaseRenewalFailed returns false
+    // -----------------------------------------------------------------------
+    @Test
+    public void testNoLeaseRenewalFailureMarksCompleted() throws IOException {
+        List<BlobItem> blobs = createBlobItems("healthy.log");
+        mockListBlobs(blobs);
+
+        when(stateTracker.filterCandidates(any())).thenReturn(blobs);
+        when(stateTracker.claim("healthy.log")).thenReturn(true);
+        mockProcessSuccess(7);
+        when(containerClient.getBlobClient("healthy.log")).thenReturn(mock(BlobClient.class));
+
+        // No lease renewal failure
+        when(stateTracker.wasLeaseRenewalFailed("healthy.log")).thenReturn(false);
+
+        BlobPoller poller = createPoller("", 10);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(1, summary.getBlobsProcessed());
+        assertEquals(0, summary.getBlobsFailed());
+        assertEquals(7, summary.getEventsProduced());
+        verify(stateTracker).markCompleted("healthy.log");
+        verify(stateTracker, never()).markFailed(anyString(), anyString());
+        verify(stateTracker).release("healthy.log");
+    }
+
+    // -----------------------------------------------------------------------
+    // 12. testPollCycleReturnsSummary — verify summary fields: processed, failed, skipped, events, duration > 0
     // -----------------------------------------------------------------------
     @Test
     public void testPollCycleReturnsSummary() throws IOException {

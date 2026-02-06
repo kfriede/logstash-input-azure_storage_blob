@@ -9,6 +9,8 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import static org.junit.Assert.*;
 
 /**
@@ -56,7 +58,41 @@ public class LeaseRecoveryIT extends AzuriteTestBase {
         lease2.releaseLease();
     }
 
-    // ── Test 2: Lease renewal keeps claim ───────────────────────────────────
+    // ── Test 2: Lease renewal failure invokes callback ──────────────────────
+
+    @Test
+    public void testLeaseRenewalFailureInvokesCallback() throws Exception {
+        uploadBlob(containerName, "callback.log", "data\n");
+
+        BlobClient blobClient = containerClient.getBlobClient("callback.log");
+
+        // Track whether the failure callback is invoked
+        AtomicBoolean callbackInvoked = new AtomicBoolean(false);
+
+        // Create LeaseManager with a short renewal interval (2s)
+        LeaseManager lease = new LeaseManager(blobClient, 15, 2,
+                () -> callbackInvoked.set(true));
+        String leaseId = lease.acquireLease();
+        assertNotNull("Lease should succeed", leaseId);
+        lease.startRenewal();
+
+        // Break the lease externally so the next renewal attempt fails
+        BlobLeaseClient breakClient = new BlobLeaseClientBuilder()
+                .blobClient(blobClient)
+                .buildClient();
+        breakClient.breakLease();
+
+        // Wait for renewal to fail (2s interval + buffer)
+        Thread.sleep(4_000);
+
+        assertTrue("Failure callback should have been invoked after lease break",
+                callbackInvoked.get());
+
+        // Clean up
+        lease.stopRenewal();
+    }
+
+    // ── Test 3: Lease renewal keeps claim ───────────────────────────────────
 
     @Test
     public void testLeaseRenewalKeepsClaim() throws Exception {

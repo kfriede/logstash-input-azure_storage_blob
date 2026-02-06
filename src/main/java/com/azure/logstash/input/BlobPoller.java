@@ -131,8 +131,15 @@ public class BlobPoller {
                         blobClient, eventConsumer, isStopped);
 
                 if (result.isCompleted()) {
-                    stateTracker.markCompleted(blobName);
-                    blobsProcessed++;
+                    if (stateTracker.wasLeaseRenewalFailed(blobName)) {
+                        logger.warn("Lease renewal failed for blob '{}' during processing — "
+                                + "marking as failed to prevent duplicates", blobName);
+                        stateTracker.markFailed(blobName, "lease renewal failed during processing");
+                        blobsFailed++;
+                    } else {
+                        stateTracker.markCompleted(blobName);
+                        blobsProcessed++;
+                    }
                     eventsProduced += result.getEventCount();
                 } else {
                     // Stopped mid-blob — mark as failed with "interrupted" per design doc

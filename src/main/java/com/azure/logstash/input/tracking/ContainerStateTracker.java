@@ -53,6 +53,7 @@ public class ContainerStateTracker implements StateTracker {
     private final String processorName;
     private final Function<BlobClient, LeaseManager> leaseManagerFactory;
     private final Map<String, LeaseManager> activeLeases = new ConcurrentHashMap<>();
+    private final Set<String> compromisedLeases = ConcurrentHashMap.newKeySet();
 
     /**
      * Public constructor — creates LeaseManagers internally via the BlobLeaseClientBuilder.
@@ -69,10 +70,20 @@ public class ContainerStateTracker implements StateTracker {
                                   String archiveContainer, String errorContainer,
                                   int leaseDurationSeconds, int renewalIntervalSeconds,
                                   String processorName) {
-        this(serviceClient, incomingContainer, archiveContainer, errorContainer,
-                leaseDurationSeconds, renewalIntervalSeconds, processorName,
-                blobClient -> new LeaseManager(blobClient, leaseDurationSeconds,
-                        renewalIntervalSeconds, () -> {}));
+        this.incomingContainerClient = serviceClient.getBlobContainerClient(incomingContainer);
+        this.archiveContainerClient = serviceClient.getBlobContainerClient(archiveContainer);
+        this.errorContainerClient = serviceClient.getBlobContainerClient(errorContainer);
+        this.leaseDurationSeconds = leaseDurationSeconds;
+        this.renewalIntervalSeconds = renewalIntervalSeconds;
+        this.processorName = processorName;
+        this.leaseManagerFactory = blobClient -> {
+            final String name = blobClient.getBlobName();
+            return new LeaseManager(blobClient, leaseDurationSeconds,
+                    renewalIntervalSeconds, () -> compromisedLeases.add(name));
+        };
+        logger.info("Container state tracker initialized for processor '{}': "
+                + "incoming='{}', archive='{}', errors='{}'",
+                processorName, incomingContainer, archiveContainer, errorContainer);
     }
 
     /**
@@ -213,6 +224,11 @@ public class ContainerStateTracker implements StateTracker {
         }
     }
 
+    @Override
+    public boolean wasLeaseRenewalFailed(String blobName) {
+        return compromisedLeases.remove(blobName);
+    }
+
     /**
      * Releases all active leases and clears the active leases map.
      */
@@ -229,6 +245,7 @@ public class ContainerStateTracker implements StateTracker {
             }
         }
         activeLeases.clear();
+        compromisedLeases.clear();
         logger.info("Container state tracker closed");
     }
 

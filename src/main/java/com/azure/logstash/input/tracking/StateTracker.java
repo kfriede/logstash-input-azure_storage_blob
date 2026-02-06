@@ -59,6 +59,21 @@ public interface StateTracker {
     void release(String blobName);
 
     /**
+     * Returns true if lease renewal failed for the given blob during processing.
+     * This indicates the blob may have been processed without exclusive access
+     * and should be marked as failed to prevent duplicates.
+     *
+     * <p>Default implementation returns false (for RegistryStateTracker which
+     * does not use leases).
+     *
+     * @param blobName the name of the blob to check
+     * @return true if lease renewal failed for this blob
+     */
+    default boolean wasLeaseRenewalFailed(String blobName) {
+        return false;
+    }
+
+    /**
      * Releases any resources held by this tracker (e.g., database connections).
      */
     void close();

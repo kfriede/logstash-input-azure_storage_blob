@@ -317,7 +317,19 @@ public class ContainerStateTrackerTest {
     }
 
     // -----------------------------------------------------------------------
-    // 10. copyAndDelete without active lease throws instead of unconditional delete
+    // 10. wasLeaseRenewalFailed returns false after normal claim (no failure)
+    // -----------------------------------------------------------------------
+    @Test
+    public void testWasLeaseRenewalFailedReturnsFalseAfterNormalClaim() {
+        when(leaseManager.acquireLease()).thenReturn("lease-id-123");
+        tracker.claim("test-blob");
+
+        assertFalse("wasLeaseRenewalFailed should return false when no renewal failure occurred",
+                tracker.wasLeaseRenewalFailed("test-blob"));
+    }
+
+    // -----------------------------------------------------------------------
+    // 11. copyAndDelete without active lease throws instead of unconditional delete
     // -----------------------------------------------------------------------
     @Test(expected = IllegalStateException.class)
     public void testMarkCompletedWithoutLeaseThrows() {

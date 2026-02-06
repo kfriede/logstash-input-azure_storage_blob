@@ -368,7 +368,20 @@ public class TagStateTrackerTest {
     }
 
     // -----------------------------------------------------------------------
-    // 14. markFailed handles null error message
+    // 14. wasLeaseRenewalFailed returns false after normal claim (no failure)
+    // -----------------------------------------------------------------------
+    @Test
+    public void testWasLeaseRenewalFailedReturnsFalseAfterNormalClaim() {
+        when(leaseManager.acquireLease()).thenReturn("lease-id-123");
+        when(blobClient.getTags()).thenReturn(new HashMap<>());
+        tracker.claim("test-blob");
+
+        assertFalse("wasLeaseRenewalFailed should return false when no renewal failure occurred",
+                tracker.wasLeaseRenewalFailed("test-blob"));
+    }
+
+    // -----------------------------------------------------------------------
+    // 15. markFailed handles null error message
     // -----------------------------------------------------------------------
     @Test
     public void testMarkFailedHandlesNullError() {

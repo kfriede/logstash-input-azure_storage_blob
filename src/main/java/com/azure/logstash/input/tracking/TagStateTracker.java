@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
@@ -64,6 +65,7 @@ public class TagStateTracker implements StateTracker {
     private final String processorName;
     private final Function<BlobClient, LeaseManager> leaseManagerFactory;
     private final Map<String, LeaseManager> activeLeases = new ConcurrentHashMap<>();
+    private final Set<String> compromisedLeases = ConcurrentHashMap.newKeySet();
 
     /**
      * Public constructor — creates LeaseManagers internally via the BlobLeaseClientBuilder.
@@ -75,9 +77,16 @@ public class TagStateTracker implements StateTracker {
      */
     public TagStateTracker(BlobContainerClient containerClient, int leaseDurationSeconds,
                            int renewalIntervalSeconds, String processorName) {
-        this(containerClient, leaseDurationSeconds, renewalIntervalSeconds, processorName,
-                blobClient -> new LeaseManager(blobClient, leaseDurationSeconds,
-                        renewalIntervalSeconds, () -> {}));
+        this.containerClient = containerClient;
+        this.leaseDurationSeconds = leaseDurationSeconds;
+        this.renewalIntervalSeconds = renewalIntervalSeconds;
+        this.processorName = processorName;
+        this.leaseManagerFactory = blobClient -> {
+            final String name = blobClient.getBlobName();
+            return new LeaseManager(blobClient, leaseDurationSeconds,
+                    renewalIntervalSeconds, () -> compromisedLeases.add(name));
+        };
+        logger.info("Tag state tracker initialized for processor '{}'", processorName);
     }
 
     /**
@@ -267,6 +276,11 @@ public class TagStateTracker implements StateTracker {
         }
     }
 
+    @Override
+    public boolean wasLeaseRenewalFailed(String blobName) {
+        return compromisedLeases.remove(blobName);
+    }
+
     /**
      * Sets tags on a blob, including the lease ID in the request conditions if provided.
      * Azure Storage requires the lease ID to be specified when modifying tags on a leased blob.
@@ -297,6 +311,7 @@ public class TagStateTracker implements StateTracker {
             }
         }
         activeLeases.clear();
+        compromisedLeases.clear();
         logger.info("Tag state tracker closed");
     }
 }
