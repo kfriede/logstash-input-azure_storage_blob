@@ -315,4 +315,20 @@ public class ContainerStateTrackerTest {
         verify(leaseManager).stopRenewal();
         verify(leaseManager).releaseLease();
     }
+
+    // -----------------------------------------------------------------------
+    // 10. copyAndDelete without active lease throws instead of unconditional delete
+    // -----------------------------------------------------------------------
+    @Test(expected = IllegalStateException.class)
+    public void testMarkCompletedWithoutLeaseThrows() {
+        // Do NOT call claim() — no lease in activeLeases map
+        String sourceUrl = "https://account.blob.core.windows.net/incoming/test-blob";
+        when(incomingBlobClient.getBlobUrl()).thenReturn(sourceUrl);
+
+        SyncPoller<BlobCopyInfo, Void> poller = mockSyncPoller();
+        when(archiveBlobClient.beginCopy(eq(sourceUrl), isNull())).thenReturn(poller);
+
+        // Should throw IllegalStateException, NOT do unconditional delete
+        tracker.markCompleted("test-blob");
+    }
 }

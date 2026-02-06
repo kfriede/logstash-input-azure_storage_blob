@@ -263,10 +263,9 @@ public class ContainerStateTracker implements StateTracker {
             lease.releaseLease();
             logger.debug("Released lease for blob '{}' after delete", blobName);
         } else {
-            // No active lease — fall back to unconditional delete
-            sourceBlobClient.delete();
-            logger.debug("Deleted blob '{}' from incoming container (no lease) after move to {}",
-                    blobName, destinationName);
+            throw new IllegalStateException(
+                    "No active lease found for blob '" + blobName
+                            + "' during " + destinationName + " move — refusing to delete without lease protection");
         }
     }
 }
