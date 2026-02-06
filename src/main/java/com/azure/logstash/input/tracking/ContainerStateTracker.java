@@ -211,6 +211,10 @@ public class ContainerStateTracker implements StateTracker {
     /**
      * Releases a claim on a blob by stopping the lease renewal and releasing the lease.
      * Removes the LeaseManager from the active leases map.
+     *
+     * <p>If no active lease is found (e.g. because {@link #markCompleted} or
+     * {@link #markFailed} already handled the lease via {@code copyAndDelete}),
+     * this is a no-op logged at debug level.
      */
     @Override
     public void release(String blobName) {
@@ -220,7 +224,7 @@ public class ContainerStateTracker implements StateTracker {
             lease.releaseLease();
             logger.debug("Released lease for blob '{}'", blobName);
         } else {
-            logger.warn("No active lease found for blob '{}' during release", blobName);
+            logger.debug("No active lease found for blob '{}' during release (already handled)", blobName);
         }
     }
 
@@ -268,17 +272,20 @@ public class ContainerStateTracker implements StateTracker {
         // consumer from acquiring the lease between release and delete (race condition).
         LeaseManager lease = activeLeases.remove(blobName);
         if (lease != null) {
-            BlobRequestConditions leaseCondition = new BlobRequestConditions()
-                    .setLeaseId(lease.getLeaseId());
-            sourceBlobClient.deleteWithResponse(DeleteSnapshotsOptionType.INCLUDE,
-                    leaseCondition, null, com.azure.core.util.Context.NONE);
-            logger.debug("Deleted blob '{}' from incoming container (with lease) after move to {}",
-                    blobName, destinationName);
-
-            // Stop the renewal timer. Do not call releaseLease() — deleting the blob
-            // implicitly releases its lease, and calling releaseLease() on a deleted blob
-            // throws BlobNotFound (404).
-            lease.stopRenewal();
+            try {
+                BlobRequestConditions leaseCondition = new BlobRequestConditions()
+                        .setLeaseId(lease.getLeaseId());
+                sourceBlobClient.deleteWithResponse(DeleteSnapshotsOptionType.INCLUDE,
+                        leaseCondition, null, com.azure.core.util.Context.NONE);
+                logger.debug("Deleted blob '{}' from incoming container (with lease) after move to {}",
+                        blobName, destinationName);
+            } finally {
+                // Always stop the renewal timer, whether delete succeeded or not.
+                // Do not call releaseLease() — if the delete succeeded, the blob (and
+                // its lease) no longer exist; if it failed, the lease will expire naturally
+                // and the blob can be retried on the next poll cycle.
+                lease.stopRenewal();
+            }
         } else {
             throw new IllegalStateException(
                     "No active lease found for blob '" + blobName
