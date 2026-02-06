@@ -7,9 +7,11 @@ import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.models.BlobItem;
 import com.azure.storage.blob.models.BlobStorageException;
+import com.azure.storage.blob.options.BlobSetTagsOptions;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -20,6 +22,7 @@ import java.util.function.Function;
 
 import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 /**
@@ -157,12 +160,12 @@ public class TagStateTrackerTest {
         verify(leaseManager).acquireLease();
         verify(leaseManager).startRenewal();
 
-        @SuppressWarnings("unchecked")
-        org.mockito.ArgumentCaptor<Map<String, String>> tagsCaptor =
-                org.mockito.ArgumentCaptor.forClass(Map.class);
-        verify(blobClient).setTags(tagsCaptor.capture());
+        // claim() always has a lease, so it uses setTagsWithResponse with lease condition
+        ArgumentCaptor<BlobSetTagsOptions> optionsCaptor =
+                ArgumentCaptor.forClass(BlobSetTagsOptions.class);
+        verify(blobClient).setTagsWithResponse(optionsCaptor.capture(), isNull(), isNull());
 
-        Map<String, String> tags = tagsCaptor.getValue();
+        Map<String, String> tags = optionsCaptor.getValue().getTags();
         assertEquals("processing", tags.get("logstash_status"));
         assertEquals("test-processor", tags.get("logstash_processor"));
         assertNotNull("logstash_started should be set", tags.get("logstash_started"));
@@ -184,12 +187,12 @@ public class TagStateTrackerTest {
 
         assertTrue("claim should return true", result);
 
-        @SuppressWarnings("unchecked")
-        org.mockito.ArgumentCaptor<Map<String, String>> tagsCaptor =
-                org.mockito.ArgumentCaptor.forClass(Map.class);
-        verify(blobClient).setTags(tagsCaptor.capture());
+        // claim() always has a lease, so it uses setTagsWithResponse with lease condition
+        ArgumentCaptor<BlobSetTagsOptions> optionsCaptor =
+                ArgumentCaptor.forClass(BlobSetTagsOptions.class);
+        verify(blobClient).setTagsWithResponse(optionsCaptor.capture(), isNull(), isNull());
 
-        Map<String, String> tags = tagsCaptor.getValue();
+        Map<String, String> tags = optionsCaptor.getValue().getTags();
         assertEquals("User tag 'team' should be preserved", "ops", tags.get("team"));
         assertEquals("User tag 'env' should be preserved", "prod", tags.get("env"));
         assertEquals("processing", tags.get("logstash_status"));
@@ -205,7 +208,8 @@ public class TagStateTrackerTest {
         when(blobClient.getTags()).thenReturn(new HashMap<>());
 
         BlobStorageException bse = createBlobStorageException(412);
-        doThrow(bse).when(blobClient).setTags(any());
+        doThrow(bse).when(blobClient).setTagsWithResponse(
+                any(BlobSetTagsOptions.class), isNull(), isNull());
 
         boolean result = tracker.claim("test-blob");
 
@@ -224,6 +228,8 @@ public class TagStateTrackerTest {
 
         assertFalse("claim should return false when lease cannot be acquired", result);
         verify(blobClient, never()).setTags(any());
+        verify(blobClient, never()).setTagsWithResponse(
+                any(BlobSetTagsOptions.class), isNull(), isNull());
     }
 
     // -----------------------------------------------------------------------
@@ -233,6 +239,7 @@ public class TagStateTrackerTest {
     public void testMarkCompletedSetsTags() {
         // First claim so we have a lease manager in the map
         when(leaseManager.acquireLease()).thenReturn("lease-id-123");
+        when(leaseManager.getLeaseId()).thenReturn("lease-id-123");
         when(blobClient.getTags()).thenReturn(new HashMap<>());
         tracker.claim("test-blob");
 
@@ -248,12 +255,12 @@ public class TagStateTrackerTest {
 
         tracker.markCompleted("test-blob");
 
-        @SuppressWarnings("unchecked")
-        org.mockito.ArgumentCaptor<Map<String, String>> tagsCaptor =
-                org.mockito.ArgumentCaptor.forClass(Map.class);
-        verify(blobClient).setTags(tagsCaptor.capture());
+        // markCompleted with active lease uses setTagsWithResponse with lease condition
+        ArgumentCaptor<BlobSetTagsOptions> optionsCaptor =
+                ArgumentCaptor.forClass(BlobSetTagsOptions.class);
+        verify(blobClient).setTagsWithResponse(optionsCaptor.capture(), isNull(), isNull());
 
-        Map<String, String> tags = tagsCaptor.getValue();
+        Map<String, String> tags = optionsCaptor.getValue().getTags();
         assertEquals("completed", tags.get("logstash_status"));
         assertNotNull("logstash_completed should be set", tags.get("logstash_completed"));
         assertEquals("test-processor", tags.get("logstash_processor"));

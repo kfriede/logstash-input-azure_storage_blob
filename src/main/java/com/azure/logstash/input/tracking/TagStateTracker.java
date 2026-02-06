@@ -4,7 +4,9 @@ import com.azure.logstash.input.LeaseManager;
 import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.models.BlobItem;
+import com.azure.storage.blob.models.BlobRequestConditions;
 import com.azure.storage.blob.models.BlobStorageException;
+import com.azure.storage.blob.options.BlobSetTagsOptions;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -172,8 +174,8 @@ public class TagStateTracker implements StateTracker {
             mergedTags.put(TAG_PROCESSOR, processorName);
             mergedTags.put(TAG_STARTED, Instant.now().toString());
 
-            // Step 4: Set merged tags (full replace — preserves user tags via merge)
-            blobClient.setTags(mergedTags);
+            // Step 4: Set merged tags with lease condition
+            setTagsWithLease(blobClient, mergedTags, leaseId);
 
         } catch (BlobStorageException e) {
             if (e.getStatusCode() == 412) {
@@ -213,7 +215,9 @@ public class TagStateTracker implements StateTracker {
         mergedTags.remove(TAG_STARTED);
         mergedTags.remove(TAG_ERROR);
 
-        blobClient.setTags(mergedTags);
+        LeaseManager lease = activeLeases.get(blobName);
+        String leaseId = (lease != null) ? lease.getLeaseId() : null;
+        setTagsWithLease(blobClient, mergedTags, leaseId);
         logger.debug("Marked blob '{}' as completed", blobName);
     }
 
@@ -238,7 +242,9 @@ public class TagStateTracker implements StateTracker {
         mergedTags.put(TAG_ERROR, truncatedError);
         mergedTags.put(TAG_PROCESSOR, processorName);
 
-        blobClient.setTags(mergedTags);
+        LeaseManager lease = activeLeases.get(blobName);
+        String leaseId = (lease != null) ? lease.getLeaseId() : null;
+        setTagsWithLease(blobClient, mergedTags, leaseId);
         logger.debug("Marked blob '{}' as failed: {}", blobName, truncatedError);
     }
 
@@ -255,6 +261,20 @@ public class TagStateTracker implements StateTracker {
             logger.debug("Released lease for blob '{}'", blobName);
         } else {
             logger.warn("No active lease found for blob '{}' during release", blobName);
+        }
+    }
+
+    /**
+     * Sets tags on a blob, including the lease ID in the request conditions if provided.
+     * Azure Storage requires the lease ID to be specified when modifying tags on a leased blob.
+     */
+    private void setTagsWithLease(BlobClient blobClient, Map<String, String> tags, String leaseId) {
+        if (leaseId != null) {
+            BlobSetTagsOptions options = new BlobSetTagsOptions(tags);
+            options.setRequestConditions(new BlobRequestConditions().setLeaseId(leaseId));
+            blobClient.setTagsWithResponse(options, null, null);
+        } else {
+            blobClient.setTags(tags);
         }
     }
 

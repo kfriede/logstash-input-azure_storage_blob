@@ -18,10 +18,9 @@ import static org.junit.Assert.*;
 /**
  * Integration tests for the tag-based state tracking strategy against Azurite.
  *
- * <p>Note: Azurite does not fully support blob index tags on leased blobs
- * (returns 412 on setTags with an active lease). These tests exercise tag
- * operations directly without leases to verify tag read/write behavior, and
- * use a no-lease TagStateTracker variant where possible.
+ * <p>Uses real blob leases against Azurite. The production code sets tags
+ * with the lease ID in the request conditions ({@code setTagsWithResponse}
+ * with {@code BlobRequestConditions}), which Azurite supports correctly.
  */
 @Category(IntegrationTest.class)
 public class TagsStrategyIT extends AzuriteTestBase {
@@ -37,38 +36,9 @@ public class TagsStrategyIT extends AzuriteTestBase {
         events = new CopyOnWriteArrayList<>();
     }
 
-    /**
-     * Creates a TagStateTracker that uses a no-op lease manager (no real leases)
-     * so that tag operations work on Azurite without 412 errors.
-     */
-    private TagStateTracker createNoLeaseTracker() {
-        return new TagStateTracker(containerClient, 15, 10, "test-host",
-                blobClient -> new LeaseManager(
-                        new com.azure.storage.blob.specialized.BlobLeaseClientBuilder()
-                                .blobClient(blobClient).buildClient(),
-                        15, 10, () -> {}) {
-                    @Override
-                    public String acquireLease() {
-                        // Return a fake lease ID — skip actual lease acquisition
-                        return "fake-lease-id";
-                    }
-                    @Override
-                    public void releaseLease() {
-                        // No-op
-                    }
-                    @Override
-                    public void startRenewal() {
-                        // No-op
-                    }
-                    @Override
-                    public void stopRenewal() {
-                        // No-op
-                    }
-                });
-    }
-
     private BlobPoller createPoller() {
-        TagStateTracker stateTracker = createNoLeaseTracker();
+        TagStateTracker stateTracker = new TagStateTracker(
+                containerClient, 15, 10, "test-host");
         BlobProcessor processor = new BlobProcessor(AZURITE_ACCOUNT, containerName, true);
         return new BlobPoller(containerClient, stateTracker, processor,
                 events::add, "", 50);

@@ -185,13 +185,13 @@ public class ContainerStateTrackerTest {
 
         tracker.markCompleted("test-blob");
 
-        // Verify order: beginCopy to archive, then delete from incoming, then lease released
-        InOrder inOrder = inOrder(archiveBlobClient, poller, incomingBlobClient, leaseManager);
+        // Verify order: beginCopy to archive, then release lease, then delete from incoming
+        InOrder inOrder = inOrder(archiveBlobClient, poller, leaseManager, incomingBlobClient);
         inOrder.verify(archiveBlobClient).beginCopy(eq(sourceUrl), isNull());
         inOrder.verify(poller).waitForCompletion();
-        inOrder.verify(incomingBlobClient).delete();
         inOrder.verify(leaseManager).stopRenewal();
         inOrder.verify(leaseManager).releaseLease();
+        inOrder.verify(incomingBlobClient).delete();
     }
 
     // -----------------------------------------------------------------------

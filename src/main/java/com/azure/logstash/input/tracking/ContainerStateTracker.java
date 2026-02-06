@@ -7,6 +7,8 @@ import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.models.BlobCopyInfo;
 import com.azure.storage.blob.models.BlobItem;
+import com.azure.storage.blob.models.BlobRequestConditions;
+import com.azure.storage.blob.models.DeleteSnapshotsOptionType;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -245,16 +247,17 @@ public class ContainerStateTracker implements StateTracker {
         poller.waitForCompletion();
         logger.debug("Copied blob '{}' to {} container", blobName, destinationName);
 
-        // Delete from incoming — only after copy is confirmed complete
-        sourceBlobClient.delete();
-        logger.debug("Deleted blob '{}' from incoming container", blobName);
-
-        // Release the lease
+        // Release the lease before deleting from incoming
         LeaseManager lease = activeLeases.remove(blobName);
         if (lease != null) {
             lease.stopRenewal();
             lease.releaseLease();
-            logger.debug("Released lease for blob '{}' after move to {}", blobName, destinationName);
+            logger.debug("Released lease for blob '{}' before delete", blobName);
         }
+
+        // Delete from incoming — only after copy is confirmed complete and lease released
+        sourceBlobClient.delete();
+        logger.debug("Deleted blob '{}' from incoming container after move to {}",
+                blobName, destinationName);
     }
 }
