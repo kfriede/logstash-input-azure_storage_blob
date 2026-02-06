@@ -1,0 +1,23 @@
+docs/
+CLAUDE.md
+AGENTS.md
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# Logstash gem packaging artifacts
+vendor/
+lib/
+Gemfile
+*.gem
+*.gemspec

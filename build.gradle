@@ -1,0 +1,179 @@
+import java.nio.file.Files
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING
+
+buildscript {
+    repositories {
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    dependencies {
+      classpath "org.yaml:snakeyaml:2.2"
+    }
+}
+
+plugins {
+  id 'com.github.johnrengelman.shadow' version '8.1.1'
+  id 'java'
+}
+
+ext {
+    shadowGradlePluginVersion = '8.1.1'
+}
+
+// load versions.yml from core before loading rubyUtils.gradle
+import org.yaml.snakeyaml.Yaml
+
+def versionsFile = file(LOGSTASH_CORE_PATH + "/../versions.yml")
+gradle.ext.versions = new Yaml().load(versionsFile.text)
+
+apply from: LOGSTASH_CORE_PATH + "/../rubyUtils.gradle"
+
+// ===========================================================================
+// plugin info
+// ===========================================================================
+group                      'org.logstashplugins' // must match the package of the main plugin class
+version                    "${file("VERSION").text.trim()}" // read from required VERSION file
+description                = "Logstash input plugin for Azure Blob Storage"
+pluginInfo.licenses        = ['Apache-2.0'] // list of SPDX license IDs
+pluginInfo.longDescription = "This gem is a Logstash plugin required to be installed on top of the Logstash core pipeline using \$LS_HOME/bin/logstash-plugin install gemname. This gem is not a stand-alone program"
+pluginInfo.authors         = ['Microsoft']
+pluginInfo.email           = ['']
+pluginInfo.homepage        = "https://github.com/Azure/logstash-input-azure_storage_blob"
+pluginInfo.pluginType      = "input"
+pluginInfo.pluginClass     = "AzureBlobStorageInput"
+pluginInfo.pluginName      = "azure_storage_blob" // must match the @LogstashPlugin annotation in the main plugin class
+// ===========================================================================
+
+java {
+  sourceCompatibility = JavaVersion.VERSION_11
+  targetCompatibility = JavaVersion.VERSION_11
+}
+
+repositories {
+    mavenCentral()
+}
+
+shadowJar {
+    archiveClassifier.set('')
+}
+
+dependencies {
+    // Azure SDKs
+    implementation 'com.azure:azure-storage-blob:12.31.2'
+    implementation 'com.azure:azure-identity:1.18.2'
+
+    // SQLite for registry strategy
+    implementation 'org.xerial:sqlite-jdbc:3.47.2.0'
+
+    // Logging — provided by Logstash at runtime
+    compileOnly 'org.apache.logging.log4j:log4j-api:2.17.0'
+    compileOnly 'org.apache.logging.log4j:log4j-core:2.17.0'
+
+    // Logstash core
+    implementation fileTree(dir: LOGSTASH_CORE_PATH, include: "**/logstash-core.jar")
+
+    // Test dependencies
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.mockito:mockito-core:5.14.0'
+    testImplementation "org.jruby:jruby-complete:${gradle.ext.versions.jruby.version}"
+}
+
+clean {
+    delete "${projectDir}/Gemfile"
+    delete "${projectDir}/" + pluginInfo.pluginFullName() + ".gemspec"
+    delete "${projectDir}/lib/"
+    delete "${projectDir}/vendor/"
+    new FileNameFinder().getFileNames(projectDir.toString(), pluginInfo.pluginFullName() + "-?.?.?.gem").each { filename ->
+        delete filename
+    }
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
+
+// ---------------------------------------------------------------------------
+// JUnit categories for test tiers
+// ---------------------------------------------------------------------------
+sourceSets {
+    integrationTest {
+        java.srcDir 'src/integration/java'
+        resources.srcDir 'src/integration/resources'
+        compileClasspath += sourceSets.main.output + sourceSets.test.output
+        runtimeClasspath += sourceSets.main.output + sourceSets.test.output
+    }
+    operationalTest {
+        java.srcDir 'src/operational/java'
+        resources.srcDir 'src/operational/resources'
+        compileClasspath += sourceSets.main.output + sourceSets.test.output
+        runtimeClasspath += sourceSets.main.output + sourceSets.test.output
+    }
+}
+
+configurations {
+    integrationTestImplementation.extendsFrom testImplementation
+    integrationTestRuntimeOnly.extendsFrom testRuntimeOnly
+    operationalTestImplementation.extendsFrom testImplementation
+    operationalTestRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
+tasks.register('integrationTest', Test) {
+    description = 'Runs integration tests against Azurite emulator.'
+    group = 'verification'
+    testClassesDirs = sourceSets.integrationTest.output.classesDirs
+    classpath = sourceSets.integrationTest.runtimeClasspath
+    useJUnit {
+        includeCategories 'com.azure.logstash.input.IntegrationTest'
+    }
+    shouldRunAfter test
+}
+
+tasks.register('operationalTest', Test) {
+    description = 'Runs operational tests against real Azure environments.'
+    group = 'verification'
+    testClassesDirs = sourceSets.operationalTest.output.classesDirs
+    classpath = sourceSets.operationalTest.runtimeClasspath
+    useJUnit {
+        includeCategories 'com.azure.logstash.input.OperationalTest'
+    }
+    shouldRunAfter integrationTest
+}
+
+// ---------------------------------------------------------------------------
+// Packaging tasks (from official Logstash Java plugin example)
+// ---------------------------------------------------------------------------
+tasks.register("vendor"){
+    dependsOn shadowJar
+    doLast {
+        String vendorPathPrefix = "vendor/jar-dependencies"
+        String projectGroupPath = project.group.replaceAll('\\.', '/')
+        File projectJarFile = file("${vendorPathPrefix}/${projectGroupPath}/${pluginInfo.pluginFullName()}/${project.version}/${pluginInfo.pluginFullName()}-${project.version}.jar")
+        projectJarFile.mkdirs()
+        Files.copy(file("$buildDir/libs/${project.name}-${project.version}.jar").toPath(), projectJarFile.toPath(), REPLACE_EXISTING)
+        validatePluginJar(projectJarFile, project.group)
+    }
+}
+
+tasks.register("generateRubySupportFiles") {
+    doLast {
+        generateRubySupportFilesForPlugin(project.description, project.group, version)
+    }
+}
+
+tasks.register("removeObsoleteJars") {
+    doLast {
+        new FileNameFinder().getFileNames(
+                projectDir.toString(),
+                "vendor/**/" + pluginInfo.pluginFullName() + "*.jar",
+                "vendor/**/" + pluginInfo.pluginFullName() + "-" + version + ".jar").each { f ->
+            delete f
+        }
+    }
+}
+
+tasks.register("gem"){
+    dependsOn = [downloadAndInstallJRuby, removeObsoleteJars, vendor, generateRubySupportFiles]
+    doLast {
+        buildGem(projectDir, buildDir, pluginInfo.pluginFullName() + ".gemspec")
+    }
+}
