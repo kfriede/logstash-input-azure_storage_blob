@@ -75,6 +75,8 @@ dependencies {
     // Test dependencies
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.mockito:mockito-core:5.14.0'
+    testRuntimeOnly 'org.apache.logging.log4j:log4j-api:2.17.0'
+    testRuntimeOnly 'org.apache.logging.log4j:log4j-core:2.17.0'
     testImplementation "org.jruby:jruby-complete:${gradle.ext.versions.jruby.version}"
 }
 
