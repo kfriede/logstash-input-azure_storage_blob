@@ -23,9 +23,9 @@ public class AuthenticationOT extends AzureGovTestBase {
     @Test
     public void testDefaultCredentialAuthenticates() throws Exception {
         BlobServiceClient dacClient = buildBlobServiceClientWithDefaultCredential();
-        // RBAC role propagation on a new storage account can take up to a few
+        // RBAC role propagation on a new storage account can take up to 5
         // minutes in Azure Government. Retry with backoff if we get 403.
-        int maxAttempts = 6;
+        int maxAttempts = 18;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
                 dacClient.getBlobContainerClient("incoming").listBlobs().forEach(b -> {});

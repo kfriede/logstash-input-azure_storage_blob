@@ -2,7 +2,7 @@ package com.azure.logstash.input.unit;
 
 import co.elastic.logstash.api.Configuration;
 import co.elastic.logstash.api.PluginConfigSpec;
-import com.azure.logstash.input.AzureBlobStorageInput;
+import com.azure.logstash.input.AzureStorageBlob;
 import com.azure.logstash.input.BlobPoller;
 import com.azure.logstash.input.BlobProcessor;
 import com.azure.logstash.input.HealthState;
@@ -28,14 +28,14 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for AzureBlobStorageInput — the main plugin class that wires
+ * Unit tests for AzureStorageBlob — the main plugin class that wires
  * all components together and runs the poll loop.
  *
  * <p>Uses a package-private constructor to inject mock dependencies, avoiding
  * real Azure SDK calls. Tests focus on behavioral aspects: config schema,
  * start/stop lifecycle, metrics updates, and health state transitions.
  */
-public class AzureBlobStorageInputTest {
+public class AzureStorageBlobTest {
 
     private BlobServiceClient serviceClient;
     private BlobContainerClient containerClient;
@@ -74,7 +74,7 @@ public class AzureBlobStorageInputTest {
     // -----------------------------------------------------------------------
     @Test
     public void testConfigSchemaReturnsAllConfigs() {
-        AzureBlobStorageInput input = new AzureBlobStorageInput(
+        AzureStorageBlob input = new AzureStorageBlob(
                 "test-id", minimalConfig(), null,
                 serviceClient, stateTracker, processor, poller);
 
@@ -87,7 +87,7 @@ public class AzureBlobStorageInputTest {
     // -----------------------------------------------------------------------
     @Test
     public void testConstructorWithValidConfigDoesNotThrow() {
-        AzureBlobStorageInput input = new AzureBlobStorageInput(
+        AzureStorageBlob input = new AzureStorageBlob(
                 "test-id", minimalConfig(), null,
                 serviceClient, stateTracker, processor, poller);
 
@@ -112,7 +112,7 @@ public class AzureBlobStorageInputTest {
         raw.put("poll_interval", 1L);
         Configuration config = new ConfigurationImpl(raw);
 
-        AzureBlobStorageInput input = new AzureBlobStorageInput(
+        AzureStorageBlob input = new AzureStorageBlob(
                 "test-id", config, null,
                 serviceClient, stateTracker, processor, poller);
 
@@ -152,7 +152,7 @@ public class AzureBlobStorageInputTest {
         raw.put("poll_interval", 1L);
         Configuration config = new ConfigurationImpl(raw);
 
-        AzureBlobStorageInput input = new AzureBlobStorageInput(
+        AzureStorageBlob input = new AzureStorageBlob(
                 "test-id", config, null,
                 serviceClient, stateTracker, processor, poller);
 
@@ -186,7 +186,7 @@ public class AzureBlobStorageInputTest {
         raw.put("poll_interval", 1L);
         Configuration config = new ConfigurationImpl(raw);
 
-        AzureBlobStorageInput input = new AzureBlobStorageInput(
+        AzureStorageBlob input = new AzureStorageBlob(
                 "test-id", config, null,
                 serviceClient, stateTracker, processor, poller);
 
@@ -246,7 +246,7 @@ public class AzureBlobStorageInputTest {
         raw.put("poll_interval", 1L);
         Configuration config = new ConfigurationImpl(raw);
 
-        AzureBlobStorageInput input = new AzureBlobStorageInput(
+        AzureStorageBlob input = new AzureStorageBlob(
                 "test-id", config, null,
                 serviceClient, stateTracker, processor, poller);
 
@@ -287,7 +287,7 @@ public class AzureBlobStorageInputTest {
         raw.put("poll_interval", 1L);
         Configuration config = new ConfigurationImpl(raw);
 
-        AzureBlobStorageInput input = new AzureBlobStorageInput(
+        AzureStorageBlob input = new AzureStorageBlob(
                 "test-id", config, null,
                 serviceClient, stateTracker, processor, poller);
 
@@ -324,7 +324,7 @@ public class AzureBlobStorageInputTest {
         raw.put("poll_interval", 1L);
         Configuration config = new ConfigurationImpl(raw);
 
-        AzureBlobStorageInput input = new AzureBlobStorageInput(
+        AzureStorageBlob input = new AzureStorageBlob(
                 "test-id", config, null,
                 serviceClient, stateTracker, processor, poller);
 
@@ -358,7 +358,7 @@ public class AzureBlobStorageInputTest {
         raw.put("poll_interval", 1L);
         Configuration config = new ConfigurationImpl(raw);
 
-        AzureBlobStorageInput input = new AzureBlobStorageInput(
+        AzureStorageBlob input = new AzureStorageBlob(
                 "test-id", config, null,
                 serviceClient, stateTracker, processor, poller);
 
@@ -381,7 +381,7 @@ public class AzureBlobStorageInputTest {
     // -----------------------------------------------------------------------
     @Test
     public void testGetIdReturnsPluginId() {
-        AzureBlobStorageInput input = new AzureBlobStorageInput(
+        AzureStorageBlob input = new AzureStorageBlob(
                 "my-plugin-id", minimalConfig(), null,
                 serviceClient, stateTracker, processor, poller);
 

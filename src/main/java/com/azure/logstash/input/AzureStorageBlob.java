@@ -31,9 +31,9 @@ import java.util.function.Consumer;
  * running natively on the JVM.
  */
 @LogstashPlugin(name = "azure_storage_blob")
-public class AzureBlobStorageInput implements Input {
+public class AzureStorageBlob implements Input {
 
-    private static final Logger logger = LogManager.getLogger(AzureBlobStorageInput.class);
+    private static final Logger logger = LogManager.getLogger(AzureStorageBlob.class);
 
     private final String id;
     private final CountDownLatch done = new CountDownLatch(1);
@@ -69,7 +69,7 @@ public class AzureBlobStorageInput implements Input {
     /**
      * Public constructor for Logstash runtime. Builds all dependencies from config.
      */
-    public AzureBlobStorageInput(String id, Configuration config, Context context) {
+    public AzureStorageBlob(String id, Configuration config, Context context) {
         this(id, config, context, null, null, null, null);
     }
 
@@ -91,7 +91,7 @@ public class AzureBlobStorageInput implements Input {
      * @param processor     pre-built BlobProcessor, or null to create from config
      * @param poller        pre-built BlobPoller, or null to create in start()
      */
-    public AzureBlobStorageInput(String id, Configuration config, Context context,
+    public AzureStorageBlob(String id, Configuration config, Context context,
                            BlobServiceClient serviceClient, StateTracker stateTracker,
                            BlobProcessor processor, BlobPoller poller) {
         this.id = id;

@@ -59,7 +59,7 @@ public class MetricsIT extends AzuriteTestBase {
         BlobPoller poller = createPoller();
         BlobPoller.PollCycleSummary summary = poller.pollOnce(() -> false);
 
-        // Simulate how AzureBlobStorageInput updates metrics
+        // Simulate how AzureStorageBlob updates metrics
         for (int i = 0; i < summary.getBlobsProcessed(); i++) {
             metrics.incrementBlobsProcessed();
         }

@@ -120,9 +120,9 @@ public abstract class AzureGovTestBase {
                         "--assignee-principal-type", principalType,
                         "--scope", scope);
 
-                // Step 8: Wait for RBAC propagation
-                System.out.println("Waiting 30s for RBAC propagation...");
-                Thread.sleep(30000);
+                // Step 8: Wait for RBAC propagation (Azure Gov can take 60s+)
+                System.out.println("Waiting 60s for RBAC propagation...");
+                Thread.sleep(60000);
 
                 // Build the SDK client from connection string
                 serviceClient = new BlobServiceClientBuilder()
