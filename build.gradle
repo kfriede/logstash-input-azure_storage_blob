@@ -66,11 +66,13 @@ dependencies {
     // SQLite for registry strategy
     implementation 'org.xerial:sqlite-jdbc:3.47.2.0'
 
-    // Logging — implementation scope so validatePluginJar can load the plugin
-    // class from the shadow JAR (static Logger field triggers class loading).
-    // Logstash provides its own Log4j at runtime; the duplicate is harmless.
+    // Logging — log4j-api must be implementation scope so validatePluginJar can
+    // load the plugin class from the shadow JAR (static Logger field triggers
+    // LogManager class loading). log4j-core is compileOnly because Logstash
+    // provides it at runtime, and including it in the shadow JAR causes
+    // LoggerContext's static init to fail looking for Logstash's MessageFactory.
     implementation 'org.apache.logging.log4j:log4j-api:2.24.3'
-    implementation 'org.apache.logging.log4j:log4j-core:2.24.3'
+    compileOnly 'org.apache.logging.log4j:log4j-core:2.24.3'
 
     // Logstash core
     implementation fileTree(dir: LOGSTASH_CORE_PATH, include: "**/logstash-core.jar")
@@ -78,7 +80,7 @@ dependencies {
     // Test dependencies
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.mockito:mockito-core:5.14.0'
-    // testRuntimeOnly for log4j not needed — already 'implementation' above
+    testRuntimeOnly 'org.apache.logging.log4j:log4j-core:2.24.3'
     testImplementation "org.jruby:jruby-complete:${gradle.ext.versions.jruby.version}"
 }
 
