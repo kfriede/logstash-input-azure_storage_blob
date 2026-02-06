@@ -78,6 +78,12 @@ public final class ConfigValidator {
                     "lease_duration must be between 15 and 60 seconds (Azure requirement), got " + leaseDuration);
         }
 
+        long pollInterval = config.get(PluginConfig.POLL_INTERVAL);
+        if (pollInterval < 1) {
+            throw new IllegalArgumentException(
+                    "poll_interval must be at least 1 second, got " + pollInterval);
+        }
+
         // ── Credential requirements ────────────────────────────────────────
         if ("connection_string".equals(authMethod)) {
             String connStr = config.get(PluginConfig.CONNECTION_STRING);

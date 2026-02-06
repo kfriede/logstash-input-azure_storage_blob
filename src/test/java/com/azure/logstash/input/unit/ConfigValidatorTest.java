@@ -191,4 +191,26 @@ public class ConfigValidatorTest {
         // storage_key not set => should throw
         ConfigValidator.validate(configFrom(raw));
     }
+
+    // -----------------------------------------------------------------------
+    // 15. poll_interval of zero throws
+    // -----------------------------------------------------------------------
+    @Test(expected = IllegalArgumentException.class)
+    public void testPollIntervalZeroThrows() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("poll_interval", 0L);
+        ConfigValidator.validate(configFrom(raw));
+    }
+
+    // -----------------------------------------------------------------------
+    // 16. poll_interval of 1 is valid
+    // -----------------------------------------------------------------------
+    @Test
+    public void testPollIntervalOneIsValid() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("poll_interval", 1L);
+        List<String> warnings = ConfigValidator.validate(configFrom(raw));
+        // Should not throw — 1 is valid
+        assertNotNull(warnings);
+    }
 }
