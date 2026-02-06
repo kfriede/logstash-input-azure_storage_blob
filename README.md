@@ -14,12 +14,30 @@ Built with Microsoft's first-party Java Azure SDKs, this plugin runs natively on
 
 ## Installation
 
+### From RubyGems
+
 ```bash
-# From a local .gem file
-/usr/share/logstash/bin/logstash-plugin install --no-verify logstash-input-azure_storage_blob-0.1.0-java.gem
+/usr/share/logstash/bin/logstash-plugin install logstash-input-azure_storage_blob
 ```
 
-Verify the plugin is installed:
+### From GitHub Release
+
+Download the `.gem` file from [Releases](https://github.com/kfriede/logstash-input-azure_storage_blob/releases), then install it:
+
+```bash
+/usr/share/logstash/bin/logstash-plugin install --no-verify logstash-input-azure_storage_blob-1.0.0-java.gem
+```
+
+### From Source
+
+```bash
+git clone https://github.com/kfriede/logstash-input-azure_storage_blob.git
+cd logstash-input-azure_storage_blob
+./gradlew gem
+/usr/share/logstash/bin/logstash-plugin install --no-verify logstash-input-azure_storage_blob-1.0.0-java.gem
+```
+
+### Verify
 
 ```bash
 /usr/share/logstash/bin/logstash-plugin list | grep azure_storage_blob

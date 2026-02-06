@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite
+        ports:
+          - 10000:10000
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Install Logstash
+        run: |
+          wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/elastic-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list
+          sudo apt-get update && sudo apt-get install -y logstash
+
+      - name: Download Logstash build support files
+        run: |
+          LS_VERSION=$(dpkg-query -W -f='${Version}' logstash | sed 's/^1://')
+          echo "Logstash version: ${LS_VERSION}"
+          sudo curl -sL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/rubyUtils.gradle" -o /usr/share/logstash/rubyUtils.gradle
+          sudo curl -sL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/versions.yml" -o /usr/share/logstash/versions.yml
+
+      - name: Run unit tests
+        run: ./gradlew test
+
+      - name: Run integration tests
+        run: ./gradlew integrationTest
+
+  release:
+    name: Release
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Install Logstash
+        run: |
+          wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/elastic-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list
+          sudo apt-get update && sudo apt-get install -y logstash
+
+      - name: Download Logstash build support files
+        run: |
+          LS_VERSION=$(dpkg-query -W -f='${Version}' logstash | sed 's/^1://')
+          echo "Logstash version: ${LS_VERSION}"
+          sudo curl -sL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/rubyUtils.gradle" -o /usr/share/logstash/rubyUtils.gradle
+          sudo curl -sL "https://raw.githubusercontent.com/elastic/logstash/v${LS_VERSION}/versions.yml" -o /usr/share/logstash/versions.yml
+
+      - name: Validate tag matches VERSION
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          FILE_VERSION="$(cat VERSION | tr -d '[:space:]')"
+          if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match VERSION file ($FILE_VERSION)"
+            exit 1
+          fi
+
+      - name: Build gem
+        run: ./gradlew gem
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: logstash-input-azure_storage_blob-*-java.gem
+          generate_release_notes: true
+
+      - name: Publish to RubyGems
+        run: |
+          mkdir -p ~/.gem
+          echo "---" > ~/.gem/credentials
+          echo ":rubygems_api_key: ${RUBYGEMS_API_KEY}" >> ~/.gem/credentials
+          chmod 0600 ~/.gem/credentials
+          gem push logstash-input-azure_storage_blob-*-java.gem
+        env:
+          RUBYGEMS_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
