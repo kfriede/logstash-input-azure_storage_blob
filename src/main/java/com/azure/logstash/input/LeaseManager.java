@@ -33,8 +33,8 @@ public class LeaseManager {
     private final Runnable onRenewalFailure;
 
     private volatile String leaseId;
-    private ScheduledExecutorService scheduler;
-    private ScheduledFuture<?> renewalFuture;
+    private volatile ScheduledExecutorService scheduler;
+    private volatile ScheduledFuture<?> renewalFuture;
 
     /**
      * Public constructor — creates the BlobLeaseClient internally via the builder.

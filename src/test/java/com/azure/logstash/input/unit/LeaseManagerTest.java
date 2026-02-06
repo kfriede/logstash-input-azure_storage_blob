@@ -180,7 +180,26 @@ public class LeaseManagerTest {
     }
 
     // -----------------------------------------------------------------------
-    // 9. Renewal failure calls callback
+    // 9. stopRenewal from different thread — tests cross-thread visibility
+    // -----------------------------------------------------------------------
+    @Test
+    public void testStopRenewalFromDifferentThread() throws Exception {
+        when(leaseClient.acquireLease(anyInt())).thenReturn("lease-id");
+
+        leaseManager = new LeaseManager(leaseClient, 15, 1, () -> {});
+        leaseManager.acquireLease();
+        leaseManager.startRenewal();
+
+        // Stop from a different thread (tests cross-thread visibility)
+        Thread stopper = new Thread(leaseManager::stopRenewal);
+        stopper.start();
+        stopper.join(5000);
+
+        assertFalse("Stopper thread should complete", stopper.isAlive());
+    }
+
+    // -----------------------------------------------------------------------
+    // 10. Renewal failure calls callback
     // -----------------------------------------------------------------------
     @Test
     public void testRenewalFailureCallsCallback() throws Exception {
