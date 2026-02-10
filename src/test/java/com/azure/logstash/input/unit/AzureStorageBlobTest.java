@@ -377,7 +377,94 @@ public class AzureStorageBlobTest {
     }
 
     // -----------------------------------------------------------------------
-    // 10. getId returns the plugin id
+    // 10. Smart poll timing: sleeps only remaining interval after fast batch
+    // -----------------------------------------------------------------------
+    @Test
+    public void testPollSleepsOnlyRemainingInterval() throws Exception {
+        // pollOnce returns instantly (batch takes ~0ms).
+        // With poll_interval=2, the loop should sleep ~2s, not 2s + batch time.
+        AtomicInteger callCount = new AtomicInteger(0);
+        when(poller.pollOnce(any())).thenAnswer(invocation -> {
+            if (callCount.incrementAndGet() > 1) {
+                Thread.sleep(50); // give stop signal time
+            }
+            return new BlobPoller.PollCycleSummary(1, 0, 0, 5, 10);
+        });
+
+        Map<String, Object> raw = new HashMap<>();
+        raw.put("storage_account", "testaccount");
+        raw.put("container", "testcontainer");
+        raw.put("poll_interval", 2L);
+        Configuration config = new ConfigurationImpl(raw);
+
+        AzureStorageBlob input = new AzureStorageBlob(
+                "test-id", config, null,
+                serviceClient, stateTracker, processor, poller);
+
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> consumer = mock(Consumer.class);
+
+        Thread pluginThread = new Thread(() -> input.start(consumer));
+        pluginThread.start();
+
+        // Wait for one full cycle (should be ~2s with smart timing)
+        Thread.sleep(2500);
+        input.stop();
+        input.awaitStop();
+        pluginThread.join(2000);
+
+        // With smart timing: first cycle takes ~2s (0ms batch + 2s sleep)
+        // Verify at least 2 poll cycles happened in ~2.5s
+        // (old behavior: each cycle = 0ms batch + 2s sleep = only 1 cycle in 2.5s)
+        verify(poller, atLeast(2)).pollOnce(any());
+    }
+
+    // -----------------------------------------------------------------------
+    // 11. Smart poll timing: starts immediately when batch exceeds interval
+    // -----------------------------------------------------------------------
+    @Test
+    public void testPollStartsImmediatelyWhenBatchOverruns() throws Exception {
+        // pollOnce takes 1.5s on first call (overruns 1s interval).
+        // Second call should start immediately, not after another 1s sleep.
+        AtomicInteger callCount = new AtomicInteger(0);
+        when(poller.pollOnce(any())).thenAnswer(invocation -> {
+            int count = callCount.incrementAndGet();
+            if (count == 1) {
+                Thread.sleep(1500); // simulate slow batch exceeding 1s interval
+            }
+            return new BlobPoller.PollCycleSummary(1, 0, 0, 5, count == 1 ? 1500 : 10);
+        });
+
+        Map<String, Object> raw = new HashMap<>();
+        raw.put("storage_account", "testaccount");
+        raw.put("container", "testcontainer");
+        raw.put("poll_interval", 1L);
+        Configuration config = new ConfigurationImpl(raw);
+
+        AzureStorageBlob input = new AzureStorageBlob(
+                "test-id", config, null,
+                serviceClient, stateTracker, processor, poller);
+
+        @SuppressWarnings("unchecked")
+        Consumer<Map<String, Object>> consumer = mock(Consumer.class);
+
+        Thread pluginThread = new Thread(() -> input.start(consumer));
+        pluginThread.start();
+
+        // Wait for two cycles: 1.5s (overrun batch) + immediate start + ~0s second batch
+        // Total should be ~1.5-2s, NOT 1.5s + 1s sleep + 0s = 2.5s
+        Thread.sleep(2200);
+        input.stop();
+        input.awaitStop();
+        pluginThread.join(2000);
+
+        // With smart timing, 2 cycles should complete within 2.2s
+        // Without smart timing, only 1 cycle would complete (1.5s batch + 1s sleep = 2.5s)
+        verify(poller, atLeast(2)).pollOnce(any());
+    }
+
+    // -----------------------------------------------------------------------
+    // 12. getId returns the plugin id
     // -----------------------------------------------------------------------
     @Test
     public void testGetIdReturnsPluginId() {
