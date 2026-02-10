@@ -14,6 +14,10 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetAddress;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.function.Consumer;
@@ -171,6 +175,7 @@ public class AzureStorageBlob implements Input {
 
         try {
             while (!stopped) {
+                Instant batchStart = Instant.now();
                 BlobPoller.PollCycleSummary summary = activePoller.pollOnce(() -> stopped);
 
                 // Update metrics
@@ -190,18 +195,34 @@ public class AzureStorageBlob implements Input {
                 healthState.recordPollResult(
                         summary.getBlobsProcessed(), summary.getBlobsFailed());
 
-                // Log summary
-                logger.info("Poll cycle complete: {} blobs processed, {} failed, "
-                                + "{} skipped, {} events produced in {}ms. "
-                                + "Next poll in {}s. Health: {}",
-                        summary.getBlobsProcessed(), summary.getBlobsFailed(),
-                        summary.getBlobsSkipped(), summary.getEventsProduced(),
-                        summary.getDurationMs(), pollInterval,
-                        healthState.getState());
+                // Compute next poll time based on when the batch started
+                Instant nextPollAt = batchStart.plusSeconds(pollInterval);
+                long sleepMs = Duration.between(Instant.now(), nextPollAt).toMillis();
+                String nextPollTimestamp = nextPollAt.atOffset(ZoneOffset.UTC)
+                        .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
 
-                // Sleep between poll cycles
-                if (!stopped) {
-                    Thread.sleep(pollInterval * 1000L);
+                if (sleepMs > 0) {
+                    long sleepSec = (sleepMs + 999) / 1000; // round up to nearest second
+                    logger.info("Poll cycle complete: {} blobs processed, {} failed, "
+                                    + "{} skipped, {} events produced in {}ms. "
+                                    + "Next poll in {}s (at {}). Health: {}",
+                            summary.getBlobsProcessed(), summary.getBlobsFailed(),
+                            summary.getBlobsSkipped(), summary.getEventsProduced(),
+                            summary.getDurationMs(), sleepSec, nextPollTimestamp,
+                            healthState.getState());
+                    if (!stopped) {
+                        Thread.sleep(sleepMs);
+                    }
+                } else {
+                    long overrunSec = (-sleepMs + 999) / 1000; // round up
+                    logger.info("Poll cycle complete: {} blobs processed, {} failed, "
+                                    + "{} skipped, {} events produced in {}ms. "
+                                    + "Batch exceeded poll rate, next poll was at {} ({}s ago), "
+                                    + "starting immediately. Health: {}",
+                            summary.getBlobsProcessed(), summary.getBlobsFailed(),
+                            summary.getBlobsSkipped(), summary.getEventsProduced(),
+                            summary.getDurationMs(), nextPollTimestamp, overrunSec,
+                            healthState.getState());
                 }
             }
         } catch (InterruptedException e) {
