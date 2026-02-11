@@ -65,10 +65,11 @@ jobs:
 
             **Install in Logstash:**
             ```bash
-            curl -Lo /tmp/plugin.gem https://github.com/kfriede/logstash-input-azure_storage_blob/releases/download/dev/logstash-input-azure_storage_blob-dev-java.gem
+            curl -Lo /tmp/plugin.gem https://github.com/${{ github.repository }}/releases/download/dev/logstash-input-azure_storage_blob-dev-java.gem
             logstash-plugin install --no-verify /tmp/plugin.gem
             ```
 
             **Last built from:** ${{ github.sha }}
           prerelease: true
+          make_latest: false
           files: logstash-input-azure_storage_blob-dev-java.gem
