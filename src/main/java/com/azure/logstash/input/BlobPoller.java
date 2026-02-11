@@ -9,10 +9,14 @@ import com.azure.storage.blob.models.ListBlobsOptions;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -112,86 +116,81 @@ public class BlobPoller {
     public PollCycleSummary pollOnce(Supplier<Boolean> isStopped) {
         long startTime = System.currentTimeMillis();
 
-        int blobsProcessed = 0;
-        int blobsFailed = 0;
+        // Phase 1: Discovery — list, filter, claim (sequential)
+        List<String> claimedBlobs = new ArrayList<>();
         int blobsSkipped = 0;
-        long eventsProduced = 0;
 
-        // Step 1: Set up listing options with optional prefix and page size
         ListBlobsOptions options = new ListBlobsOptions();
         if (prefix != null && !prefix.isEmpty()) {
             options.setPrefix(prefix);
         }
         options.setMaxResultsPerPage(LISTING_PAGE_SIZE);
 
-        // Step 2: Process blobs page-by-page (bounds memory to one page at a time)
-        int processed = 0;
         for (PagedResponse<BlobItem> page :
                 containerClient.listBlobs(options, null).iterableByPage()) {
 
-            if (processed >= batchSize || isStopped.get()) {
+            if (claimedBlobs.size() >= batchSize || isStopped.get()) {
                 break;
             }
 
-            // Filter candidates in this page
             List<BlobItem> candidates = stateTracker.filterCandidates(page.getValue());
 
             logger.debug("Page: {} blobs listed, {} candidates after filtering",
                     page.getValue().size(), candidates.size());
 
-            // Process candidates from this page
             for (BlobItem candidate : candidates) {
-                if (processed >= batchSize) {
-                    break;
-                }
-
-                if (isStopped.get()) {
-                    logger.debug("Stop requested, breaking poll cycle after {} blobs", processed);
+                if (claimedBlobs.size() >= batchSize || isStopped.get()) {
                     break;
                 }
 
                 String blobName = candidate.getName();
-
-                // Try to claim the blob
-                if (!stateTracker.claim(blobName)) {
+                if (stateTracker.claim(blobName)) {
+                    claimedBlobs.add(blobName);
+                } else {
                     logger.debug("Could not claim blob {}, skipping", blobName);
                     blobsSkipped++;
-                    continue;
                 }
-
-                // Process the blob (claim succeeded)
-                try {
-                    BlobClient blobClient = containerClient.getBlobClient(blobName);
-                    BlobProcessor.ProcessResult result = processor.process(
-                            blobClient, eventConsumer, isStopped);
-
-                    if (result.isCompleted()) {
-                        if (stateTracker.wasLeaseRenewalFailed(blobName)) {
-                            logger.warn("Lease renewal failed for blob '{}' during processing — "
-                                    + "marking as failed to prevent duplicates", blobName);
-                            stateTracker.markFailed(blobName, "lease renewal failed during processing");
-                            blobsFailed++;
-                        } else {
-                            stateTracker.markCompleted(blobName);
-                            blobsProcessed++;
-                        }
-                        eventsProduced += result.getEventCount();
-                    } else {
-                        // Stopped mid-blob — mark as failed with "interrupted" per design doc
-                        stateTracker.markFailed(blobName, "interrupted");
-                        blobsFailed++;
-                        eventsProduced += result.getEventCount();
-                    }
-                } catch (Exception e) {
-                    logger.warn("Failed to process blob {}: {}", blobName, e.getMessage());
-                    stateTracker.markFailed(blobName, e.getMessage());
-                    blobsFailed++;
-                } finally {
-                    stateTracker.release(blobName);
-                }
-
-                processed++;
             }
+        }
+
+        // Phase 2: Processing — process, mark, release (parallel)
+        if (claimedBlobs.isEmpty()) {
+            long durationMs = System.currentTimeMillis() - startTime;
+            return new PollCycleSummary(0, 0, blobsSkipped, 0, durationMs);
+        }
+
+        // Build tasks
+        List<Callable<BlobResult>> tasks = new ArrayList<>();
+        for (String blobName : claimedBlobs) {
+            tasks.add(() -> processBlob(blobName, isStopped));
+        }
+
+        // Execute and collect
+        int blobsProcessed = 0;
+        int blobsFailed = 0;
+        long eventsProduced = 0;
+
+        try {
+            List<Future<BlobResult>> futures = executor.invokeAll(tasks);
+            for (Future<BlobResult> future : futures) {
+                try {
+                    BlobResult result = future.get();
+                    if (result.success) {
+                        blobsProcessed++;
+                    } else {
+                        blobsFailed++;
+                    }
+                    eventsProduced += result.events;
+                } catch (ExecutionException e) {
+                    // Should not happen — processBlob catches all exceptions
+                    logger.error("Unexpected execution error", e);
+                    blobsFailed++;
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.info("Poll cycle interrupted during processing");
+            blobsFailed = claimedBlobs.size() - blobsProcessed;
         }
 
         long durationMs = System.currentTimeMillis() - startTime;
@@ -214,6 +213,50 @@ public class BlobPoller {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.warn("Interrupted while waiting for BlobPoller thread pool shutdown");
+        }
+    }
+
+    /**
+     * Processes a single claimed blob: stream content, mark result, release.
+     * Called from worker threads. Never throws — all exceptions are caught.
+     */
+    private BlobResult processBlob(String blobName, Supplier<Boolean> isStopped) {
+        try {
+            BlobClient blobClient = containerClient.getBlobClient(blobName);
+            BlobProcessor.ProcessResult result = processor.process(
+                    blobClient, eventConsumer, isStopped);
+
+            if (result.isCompleted()) {
+                if (stateTracker.wasLeaseRenewalFailed(blobName)) {
+                    logger.warn("Lease renewal failed for blob '{}' during processing — "
+                            + "marking as failed to prevent duplicates", blobName);
+                    stateTracker.markFailed(blobName, "lease renewal failed during processing");
+                    return new BlobResult(false, result.getEventCount());
+                } else {
+                    stateTracker.markCompleted(blobName);
+                    return new BlobResult(true, result.getEventCount());
+                }
+            } else {
+                stateTracker.markFailed(blobName, "interrupted");
+                return new BlobResult(false, result.getEventCount());
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to process blob {}: {}", blobName, e.getMessage());
+            stateTracker.markFailed(blobName, e.getMessage());
+            return new BlobResult(false, 0);
+        } finally {
+            stateTracker.release(blobName);
+        }
+    }
+
+    /** Result of processing a single blob. */
+    private static class BlobResult {
+        final boolean success;
+        final long events;
+
+        BlobResult(boolean success, long events) {
+            this.success = success;
+            this.events = events;
         }
     }
 

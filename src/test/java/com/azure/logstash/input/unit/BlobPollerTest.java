@@ -449,4 +449,59 @@ public class BlobPollerTest {
         poller.pollOnce(notStopped);
         poller.close(); // should not throw
     }
+
+    // -----------------------------------------------------------------------
+    // 14. testConcurrentProcessing — with concurrency=3, verify all blobs processed
+    // -----------------------------------------------------------------------
+    @Test
+    public void testConcurrentProcessing() throws IOException {
+        List<BlobItem> blobs = createBlobItems("a.log", "b.log", "c.log");
+        mockListBlobs(blobs);
+
+        when(stateTracker.filterCandidates(any())).thenReturn(blobs);
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(5);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = new BlobPoller(containerClient, stateTracker, processor,
+                eventConsumer, "", 10, 3);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(3, summary.getBlobsProcessed());
+        assertEquals(0, summary.getBlobsFailed());
+        assertEquals(15, summary.getEventsProduced());
+        verify(stateTracker, times(3)).markCompleted(anyString());
+        verify(stateTracker, times(3)).release(anyString());
+        poller.close();
+    }
+
+    // -----------------------------------------------------------------------
+    // 15. testConcurrentMixedResults — parallel processing with mixed success/failure
+    // -----------------------------------------------------------------------
+    @Test
+    public void testConcurrentMixedResults() throws IOException {
+        List<BlobItem> blobs = createBlobItems("ok.log", "fail.log", "ok2.log");
+        mockListBlobs(blobs);
+
+        when(stateTracker.filterCandidates(any())).thenReturn(blobs);
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        // ok.log and ok2.log succeed, fail.log throws
+        when(processor.process(any(BlobClient.class), any(Consumer.class), any(Supplier.class)))
+                .thenAnswer(invocation -> {
+                    return new BlobProcessor.ProcessResult(5, true);
+                })
+                .thenThrow(new RuntimeException("boom"))
+                .thenReturn(new BlobProcessor.ProcessResult(3, true));
+
+        BlobPoller poller = new BlobPoller(containerClient, stateTracker, processor,
+                eventConsumer, "", 10, 3);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(2, summary.getBlobsProcessed());
+        assertEquals(1, summary.getBlobsFailed());
+        assertEquals(8, summary.getEventsProduced());
+        poller.close();
+    }
 }
