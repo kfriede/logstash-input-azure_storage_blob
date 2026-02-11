@@ -87,6 +87,10 @@ public final class PluginConfig {
     public static final PluginConfigSpec<Long> BLOB_BATCH_SIZE =
             PluginConfigSpec.numSetting("blob_batch_size", 10);
 
+    /** Number of blobs to process in parallel within a poll cycle. */
+    public static final PluginConfigSpec<Long> BLOB_CONCURRENCY =
+            PluginConfigSpec.numSetting("blob_concurrency", 1);
+
     /** Whether to skip empty lines when processing blob content. */
     public static final PluginConfigSpec<Boolean> SKIP_EMPTY_LINES =
             PluginConfigSpec.booleanSetting("skip_empty_lines", true);
@@ -120,6 +124,7 @@ public final class PluginConfig {
                     POLL_INTERVAL,
                     PREFIX,
                     BLOB_BATCH_SIZE,
+                    BLOB_CONCURRENCY,
                     SKIP_EMPTY_LINES,
                     LEASE_DURATION,
                     LEASE_RENEWAL

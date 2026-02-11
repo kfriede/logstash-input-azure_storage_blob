@@ -213,4 +213,27 @@ public class ConfigValidatorTest {
         // Should not throw — 1 is valid
         assertNotNull(warnings);
     }
+
+    // -----------------------------------------------------------------------
+    // 17. blob_concurrency with registry strategy => warn and force to 1
+    // -----------------------------------------------------------------------
+    @Test
+    public void testBlobConcurrencyIgnoredForRegistryStrategy() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("tracking_strategy", "registry");
+        raw.put("blob_concurrency", 4L);
+        List<String> warnings = ConfigValidator.validate(configFrom(raw));
+        assertTrue(warnings.stream().anyMatch(
+                w -> w.contains("blob_concurrency") && w.contains("registry")));
+    }
+
+    // -----------------------------------------------------------------------
+    // 18. blob_concurrency of zero throws
+    // -----------------------------------------------------------------------
+    @Test(expected = IllegalArgumentException.class)
+    public void testBlobConcurrencyZeroThrows() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("blob_concurrency", 0L);
+        ConfigValidator.validate(configFrom(raw));
+    }
 }

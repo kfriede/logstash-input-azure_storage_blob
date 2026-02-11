@@ -121,6 +121,17 @@ public final class ConfigValidator {
             warnings.add("Lease coordination is not used with registry strategy");
         }
 
+        long blobConcurrency = config.get(PluginConfig.BLOB_CONCURRENCY);
+        if (blobConcurrency < 1) {
+            throw new IllegalArgumentException(
+                    "blob_concurrency must be at least 1, got " + blobConcurrency);
+        }
+
+        if ("registry".equals(strategy) && blobConcurrency > 1) {
+            warnings.add("blob_concurrency is not supported with registry strategy "
+                    + "(single-replica only), using 1");
+        }
+
         return warnings;
     }
 }
