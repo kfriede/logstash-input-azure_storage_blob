@@ -58,6 +58,7 @@ public class AzureStorageBlob implements Input {
     private final long pollInterval;
     private final String prefix;
     private final long blobBatchSize;
+    private final long blobConcurrency;
     private final boolean skipEmptyLines;
     private final long leaseDuration;
     private final long leaseRenewal;
@@ -115,6 +116,14 @@ public class AzureStorageBlob implements Input {
         this.pollInterval = config.get(PluginConfig.POLL_INTERVAL);
         this.prefix = config.get(PluginConfig.PREFIX);
         this.blobBatchSize = config.get(PluginConfig.BLOB_BATCH_SIZE);
+
+        // Read and apply blob_concurrency (forced to 1 for registry strategy)
+        long effectiveConcurrency = config.get(PluginConfig.BLOB_CONCURRENCY);
+        if ("registry".equals(this.trackingStrategy) && effectiveConcurrency > 1) {
+            effectiveConcurrency = 1;
+        }
+        this.blobConcurrency = effectiveConcurrency;
+
         this.skipEmptyLines = config.get(PluginConfig.SKIP_EMPTY_LINES);
         this.leaseDuration = config.get(PluginConfig.LEASE_DURATION);
         this.leaseRenewal = config.get(PluginConfig.LEASE_RENEWAL);
@@ -157,9 +166,10 @@ public class AzureStorageBlob implements Input {
         logger.info("Azure Blob Storage input plugin initialized: "
                         + "storage_account={}, container={}, tracking_strategy={}, "
                         + "poll_interval={}s, prefix='{}', blob_batch_size={}, "
-                        + "auth_method={}, cloud={}, hostname={}",
+                        + "blob_concurrency={}, auth_method={}, cloud={}, hostname={}",
                 this.storageAccount, this.container, this.trackingStrategy,
                 this.pollInterval, this.prefix, this.blobBatchSize,
+                this.blobConcurrency,
                 this.authMethod, this.cloud.isEmpty() ? "(auto-detect)" : this.cloud,
                 hostname);
     }
@@ -170,7 +180,7 @@ public class AzureStorageBlob implements Input {
         BlobPoller activePoller = this.poller;
         if (activePoller == null) {
             activePoller = new BlobPoller(containerClient, stateTracker, processor,
-                    consumer, prefix, (int) blobBatchSize);
+                    consumer, prefix, (int) blobBatchSize, (int) blobConcurrency);
         }
 
         try {
@@ -230,6 +240,9 @@ public class AzureStorageBlob implements Input {
             logger.info("Poll loop interrupted, shutting down");
         } finally {
             stopped = true;
+            if (activePoller != null) {
+                activePoller.close();
+            }
             if (stateTracker != null) {
                 stateTracker.close();
             }
