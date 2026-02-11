@@ -436,4 +436,17 @@ public class BlobPollerTest {
         assertEquals(5, summary.getEventsProduced());
         assertTrue("Duration should be >= 0", summary.getDurationMs() >= 0);
     }
+
+    // -----------------------------------------------------------------------
+    // 13. testCloseDoesNotThrow — close() does not throw, poller can be reused via pollOnce safely
+    // -----------------------------------------------------------------------
+    @Test
+    public void testCloseDoesNotThrow() throws IOException {
+        mockListBlobs(Collections.emptyList());
+        when(stateTracker.filterCandidates(any())).thenReturn(Collections.emptyList());
+
+        BlobPoller poller = createPoller("", 10);
+        poller.pollOnce(notStopped);
+        poller.close(); // should not throw
+    }
 }

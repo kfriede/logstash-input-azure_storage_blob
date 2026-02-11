@@ -11,6 +11,9 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -52,9 +55,40 @@ public class BlobPoller {
     private final Consumer<Map<String, Object>> eventConsumer;
     private final String prefix;
     private final int batchSize;
+    private final int concurrency;
+    private final ExecutorService executor;
 
     /**
-     * Creates a new BlobPoller.
+     * Creates a new BlobPoller with the specified concurrency level.
+     *
+     * @param containerClient the Azure container client for listing and accessing blobs
+     * @param stateTracker    tracks blob processing state (claim, complete, fail, release)
+     * @param processor       streams blob content and produces events
+     * @param eventConsumer   callback that receives each event map for Logstash queue
+     * @param prefix          blob name prefix filter (empty string means no filter)
+     * @param batchSize       maximum number of blobs to process per poll cycle
+     * @param concurrency     number of worker threads for parallel blob processing
+     */
+    public BlobPoller(BlobContainerClient containerClient, StateTracker stateTracker,
+                      BlobProcessor processor, Consumer<Map<String, Object>> eventConsumer,
+                      String prefix, int batchSize, int concurrency) {
+        this.containerClient = containerClient;
+        this.stateTracker = stateTracker;
+        this.processor = processor;
+        this.eventConsumer = eventConsumer;
+        this.prefix = prefix;
+        this.batchSize = batchSize;
+        this.concurrency = concurrency;
+        this.executor = Executors.newFixedThreadPool(concurrency, r -> {
+            Thread t = new Thread(r);
+            t.setName("azure-blob-worker-" + t.getId());
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    /**
+     * Creates a new BlobPoller with default concurrency of 1 (sequential processing).
      *
      * @param containerClient the Azure container client for listing and accessing blobs
      * @param stateTracker    tracks blob processing state (claim, complete, fail, release)
@@ -66,12 +100,7 @@ public class BlobPoller {
     public BlobPoller(BlobContainerClient containerClient, StateTracker stateTracker,
                       BlobProcessor processor, Consumer<Map<String, Object>> eventConsumer,
                       String prefix, int batchSize) {
-        this.containerClient = containerClient;
-        this.stateTracker = stateTracker;
-        this.processor = processor;
-        this.eventConsumer = eventConsumer;
-        this.prefix = prefix;
-        this.batchSize = batchSize;
+        this(containerClient, stateTracker, processor, eventConsumer, prefix, batchSize, 1);
     }
 
     /**
@@ -171,6 +200,21 @@ public class BlobPoller {
 
         return new PollCycleSummary(blobsProcessed, blobsFailed, blobsSkipped,
                 eventsProduced, durationMs);
+    }
+
+    /**
+     * Shuts down the worker thread pool. Safe to call multiple times.
+     */
+    public void close() {
+        executor.shutdownNow();
+        try {
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                logger.warn("BlobPoller thread pool did not terminate within 5 seconds");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.warn("Interrupted while waiting for BlobPoller thread pool shutdown");
+        }
     }
 
     /**
