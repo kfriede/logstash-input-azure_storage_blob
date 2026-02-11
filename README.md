@@ -28,6 +28,15 @@ Download the `.gem` file from [Releases](https://github.com/kfriede/logstash-inp
 /usr/share/logstash/bin/logstash-plugin install --no-verify logstash-input-azure_storage_blob-1.0.0-java.gem
 ```
 
+### Dev Build (Latest from Main)
+
+A rolling dev build is published automatically on every push to `main`. This is useful for testing the latest changes before a tagged release, e.g. in a Docker container:
+
+```bash
+curl -Lo /tmp/plugin.gem https://github.com/kfriede/logstash-input-azure_storage_blob/releases/download/dev/logstash-input-azure_storage_blob-dev-java.gem
+/usr/share/logstash/bin/logstash-plugin install --no-verify /tmp/plugin.gem
+```
+
 ### From Source
 
 ```bash
