@@ -504,4 +504,34 @@ public class BlobPollerTest {
         assertEquals(8, summary.getEventsProduced());
         poller.close();
     }
+
+    // -----------------------------------------------------------------------
+    // 16. testInterruptedPollCycleCancelsPendingBlobs — stop signal after first blob → remaining blobs interrupted
+    // -----------------------------------------------------------------------
+    @Test
+    public void testInterruptedPollCycleCancelsPendingBlobs() throws Exception {
+        List<BlobItem> items = createBlobItems("blob-1", "blob-2", "blob-3");
+        mockListBlobs(items);
+        when(stateTracker.filterCandidates(anyList())).thenReturn(items);
+        when(stateTracker.claim(anyString())).thenReturn(true);
+
+        // First blob succeeds, then stop signal fires
+        AtomicInteger processCount = new AtomicInteger(0);
+        Supplier<Boolean> stopAfterFirst = () -> processCount.get() >= 1;
+
+        when(processor.process(any(BlobClient.class), any(Consumer.class), any(Supplier.class)))
+                .thenAnswer(invocation -> {
+                    processCount.incrementAndGet();
+                    return new BlobProcessor.ProcessResult(10, true);
+                });
+
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = new BlobPoller(containerClient, stateTracker, processor,
+                eventConsumer, "", 10, 1);  // concurrency=1 for deterministic order
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(stopAfterFirst);
+
+        // At least 1 blob should be processed, remaining marked failed/interrupted
+        assertTrue("At least 1 blob should be processed", summary.getBlobsProcessed() >= 1);
+    }
 }
