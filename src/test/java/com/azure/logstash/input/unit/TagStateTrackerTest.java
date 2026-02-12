@@ -70,18 +70,14 @@ public class TagStateTrackerTest {
     }
 
     // -----------------------------------------------------------------------
-    // 1. filterCandidates excludes completed blobs
+    // 1. filterCandidates excludes completed blobs (reads tags from BlobItem)
     // -----------------------------------------------------------------------
     @Test
     public void testFilterCandidatesExcludesCompleted() {
         Map<String, String> completedTags = new HashMap<>();
         completedTags.put("logstash_status", "completed");
 
-        BlobClient completedBlobClient = mock(BlobClient.class);
-        when(completedBlobClient.getTags()).thenReturn(completedTags);
-        when(containerClient.getBlobClient("completed-blob")).thenReturn(completedBlobClient);
-
-        BlobItem completedBlob = new BlobItem().setName("completed-blob");
+        BlobItem completedBlob = new BlobItem().setName("completed-blob").setTags(completedTags);
         List<BlobItem> candidates = tracker.filterCandidates(
                 Collections.singletonList(completedBlob));
 
@@ -89,18 +85,14 @@ public class TagStateTrackerTest {
     }
 
     // -----------------------------------------------------------------------
-    // 2. filterCandidates excludes processing blobs
+    // 2. filterCandidates excludes processing blobs (reads tags from BlobItem)
     // -----------------------------------------------------------------------
     @Test
     public void testFilterCandidatesExcludesProcessing() {
         Map<String, String> processingTags = new HashMap<>();
         processingTags.put("logstash_status", "processing");
 
-        BlobClient processingBlobClient = mock(BlobClient.class);
-        when(processingBlobClient.getTags()).thenReturn(processingTags);
-        when(containerClient.getBlobClient("processing-blob")).thenReturn(processingBlobClient);
-
-        BlobItem processingBlob = new BlobItem().setName("processing-blob");
+        BlobItem processingBlob = new BlobItem().setName("processing-blob").setTags(processingTags);
         List<BlobItem> candidates = tracker.filterCandidates(
                 Collections.singletonList(processingBlob));
 
@@ -108,42 +100,45 @@ public class TagStateTrackerTest {
     }
 
     // -----------------------------------------------------------------------
-    // 3. filterCandidates includes blobs with no tags
+    // 3. filterCandidates includes blobs with null tags (no setTags call)
     // -----------------------------------------------------------------------
     @Test
     public void testFilterCandidatesIncludesNoTags() {
-        Map<String, String> emptyTags = new HashMap<>();
-
-        BlobClient noTagsBlobClient = mock(BlobClient.class);
-        when(noTagsBlobClient.getTags()).thenReturn(emptyTags);
-        when(containerClient.getBlobClient("no-tags-blob")).thenReturn(noTagsBlobClient);
-
         BlobItem noTagsBlob = new BlobItem().setName("no-tags-blob");
         List<BlobItem> candidates = tracker.filterCandidates(
                 Collections.singletonList(noTagsBlob));
 
-        assertEquals("Blob with no tags should be included", 1, candidates.size());
+        assertEquals("Blob with null tags should be included", 1, candidates.size());
         assertEquals("no-tags-blob", candidates.get(0).getName());
     }
 
     // -----------------------------------------------------------------------
-    // 4. filterCandidates includes failed blobs (for reprocessing)
+    // 4. filterCandidates includes failed blobs for reprocessing (reads tags from BlobItem)
     // -----------------------------------------------------------------------
     @Test
     public void testFilterCandidatesIncludesFailed() {
         Map<String, String> failedTags = new HashMap<>();
         failedTags.put("logstash_status", "failed");
 
-        BlobClient failedBlobClient = mock(BlobClient.class);
-        when(failedBlobClient.getTags()).thenReturn(failedTags);
-        when(containerClient.getBlobClient("failed-blob")).thenReturn(failedBlobClient);
-
-        BlobItem failedBlob = new BlobItem().setName("failed-blob");
+        BlobItem failedBlob = new BlobItem().setName("failed-blob").setTags(failedTags);
         List<BlobItem> candidates = tracker.filterCandidates(
                 Collections.singletonList(failedBlob));
 
         assertEquals("Failed blob should be included for reprocessing", 1, candidates.size());
         assertEquals("failed-blob", candidates.get(0).getName());
+    }
+
+    // -----------------------------------------------------------------------
+    // 4b. filterCandidates includes blobs with empty tags map
+    // -----------------------------------------------------------------------
+    @Test
+    public void testFilterCandidatesIncludesEmptyTags() {
+        BlobItem emptyTagsBlob = new BlobItem().setName("empty-tags-blob").setTags(new HashMap<>());
+        List<BlobItem> candidates = tracker.filterCandidates(
+                Collections.singletonList(emptyTagsBlob));
+
+        assertEquals("Blob with empty tags map should be included", 1, candidates.size());
+        assertEquals("empty-tags-blob", candidates.get(0).getName());
     }
 
     // -----------------------------------------------------------------------
