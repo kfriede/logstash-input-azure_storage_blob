@@ -5,6 +5,7 @@ import com.azure.logstash.input.tracking.StateTracker;
 import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.models.BlobItem;
+import com.azure.storage.blob.models.BlobListDetails;
 import com.azure.storage.blob.models.ListBlobsOptions;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -125,6 +126,7 @@ public class BlobPoller {
             options.setPrefix(prefix);
         }
         options.setMaxResultsPerPage(LISTING_PAGE_SIZE);
+        options.setDetails(new BlobListDetails().setRetrieveTags(true));
 
         for (PagedResponse<BlobItem> page :
                 containerClient.listBlobs(options, null).iterableByPage()) {

@@ -12,6 +12,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -114,7 +115,7 @@ public class TagStateTracker implements StateTracker {
     /**
      * Filters blobs to include only those eligible for processing.
      *
-     * <p>For each blob, retrieves its tags and checks the {@code logstash_status} tag:
+     * <p>For each blob, reads its inline tags and checks the {@code logstash_status} tag:
      * <ul>
      *   <li>Excludes blobs with status "processing" or "completed"</li>
      *   <li>Includes blobs with no logstash_status tag (new blobs)</li>
@@ -125,20 +126,17 @@ public class TagStateTracker implements StateTracker {
     public List<BlobItem> filterCandidates(List<BlobItem> blobs) {
         List<BlobItem> candidates = new ArrayList<>();
         for (BlobItem blob : blobs) {
-            try {
-                BlobClient blobClient = containerClient.getBlobClient(blob.getName());
-                Map<String, String> tags = blobClient.getTags();
-                String status = tags.get(TAG_STATUS);
+            Map<String, String> tags = blob.getTags();
+            if (tags == null) {
+                tags = Collections.emptyMap();
+            }
+            String status = tags.get(TAG_STATUS);
 
-                if (status == null || STATUS_FAILED.equals(status)) {
-                    candidates.add(blob);
-                } else {
-                    logger.debug("Excluding blob '{}' with status '{}'",
-                            blob.getName(), status);
-                }
-            } catch (BlobStorageException e) {
-                logger.warn("Failed to read tags for blob '{}', skipping: {}",
-                        blob.getName(), e.getMessage());
+            if (status == null || STATUS_FAILED.equals(status)) {
+                candidates.add(blob);
+            } else {
+                logger.debug("Excluding blob '{}' with status '{}'",
+                        blob.getName(), status);
             }
         }
         return candidates;
