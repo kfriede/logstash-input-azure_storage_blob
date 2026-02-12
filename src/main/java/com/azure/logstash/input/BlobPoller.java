@@ -122,6 +122,7 @@ public class BlobPoller {
         // Phase 1: Discovery — list, filter, claim (sequential)
         List<String> claimedBlobs = new ArrayList<>();
         int blobsSkipped = 0;
+        int blobsListed = 0;
 
         ListBlobsOptions options = new ListBlobsOptions();
         if (prefix != null && !prefix.isEmpty()) {
@@ -138,6 +139,7 @@ public class BlobPoller {
             }
 
             List<BlobItem> candidates = stateTracker.filterCandidates(page.getValue());
+            blobsListed += page.getValue().size();
 
             logger.debug("Page: {} blobs listed, {} candidates after filtering",
                     page.getValue().size(), candidates.size());
@@ -156,6 +158,12 @@ public class BlobPoller {
                 }
             }
         }
+
+        long discoveryMs = System.currentTimeMillis() - startTime;
+        logger.info("Discovery: {} blobs listed, {} candidates, {} claimed, {} skipped in {}.{}s",
+                blobsListed, claimedBlobs.size() + blobsSkipped,
+                claimedBlobs.size(), blobsSkipped,
+                discoveryMs / 1000, String.format("%01d", (discoveryMs % 1000) / 100));
 
         // Phase 2: Processing — process, mark, release (parallel)
         if (claimedBlobs.isEmpty()) {
@@ -186,8 +194,19 @@ public class BlobPoller {
                     BlobResult result = cs.take().get();
                     if (result.success) {
                         blobsProcessed++;
+                        double evPerSec = result.durationMs > 0
+                                ? (result.events * 1000.0 / result.durationMs) : 0;
+                        logger.info("Blob complete: {} — {} events in {}.{}s ({} ev/s), marked completed",
+                                result.blobName, result.events,
+                                result.durationMs / 1000,
+                                String.format("%01d", (result.durationMs % 1000) / 100),
+                                String.format("%.0f", evPerSec));
                     } else {
                         blobsFailed++;
+                        logger.info("Blob complete: {} — {} events in {}.{}s, marked failed",
+                                result.blobName, result.events,
+                                result.durationMs / 1000,
+                                String.format("%01d", (result.durationMs % 1000) / 100));
                     }
                     eventsProduced += result.events;
                 } catch (ExecutionException e) {
@@ -206,8 +225,6 @@ public class BlobPoller {
         }
 
         long durationMs = System.currentTimeMillis() - startTime;
-        logger.debug("Poll cycle complete: {} processed, {} failed, {} skipped, {} events in {}ms",
-                blobsProcessed, blobsFailed, blobsSkipped, eventsProduced, durationMs);
 
         return new PollCycleSummary(blobsProcessed, blobsFailed, blobsSkipped,
                 eventsProduced, durationMs);
@@ -235,6 +252,7 @@ public class BlobPoller {
     private BlobResult processBlob(String blobName, Supplier<Boolean> isStopped) {
         long startMs = System.currentTimeMillis();
         try {
+            logger.info("Blob start: {} (thread: {})", blobName, Thread.currentThread().getName());
             BlobClient blobClient = containerClient.getBlobClient(blobName);
             BlobProcessor.ProcessResult result = processor.process(
                     blobClient, eventConsumer, isStopped);
