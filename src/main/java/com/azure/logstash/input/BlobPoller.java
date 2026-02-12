@@ -14,7 +14,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -167,16 +169,21 @@ public class BlobPoller {
             tasks.add(() -> processBlob(blobName, isStopped));
         }
 
-        // Execute and collect
+        // Execute via CompletionService and collect results in completion order
         int blobsProcessed = 0;
         int blobsFailed = 0;
         long eventsProduced = 0;
 
+        CompletionService<BlobResult> cs = new ExecutorCompletionService<>(executor);
+        List<Future<BlobResult>> submitted = new ArrayList<>();
+        for (Callable<BlobResult> task : tasks) {
+            submitted.add(cs.submit(task));
+        }
+
         try {
-            List<Future<BlobResult>> futures = executor.invokeAll(tasks);
-            for (Future<BlobResult> future : futures) {
+            for (int i = 0; i < submitted.size(); i++) {
                 try {
-                    BlobResult result = future.get();
+                    BlobResult result = cs.take().get();
                     if (result.success) {
                         blobsProcessed++;
                     } else {
@@ -191,7 +198,10 @@ public class BlobPoller {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            logger.info("Poll cycle interrupted during processing");
+            logger.info("Poll cycle interrupted during processing, cancelling pending blobs");
+            for (Future<BlobResult> future : submitted) {
+                future.cancel(true);
+            }
             blobsFailed = claimedBlobs.size() - blobsProcessed;
         }
 
@@ -223,42 +233,50 @@ public class BlobPoller {
      * Called from worker threads. Never throws — all exceptions are caught.
      */
     private BlobResult processBlob(String blobName, Supplier<Boolean> isStopped) {
+        long startMs = System.currentTimeMillis();
         try {
             BlobClient blobClient = containerClient.getBlobClient(blobName);
             BlobProcessor.ProcessResult result = processor.process(
                     blobClient, eventConsumer, isStopped);
+
+            long durationMs = System.currentTimeMillis() - startMs;
 
             if (result.isCompleted()) {
                 if (stateTracker.wasLeaseRenewalFailed(blobName)) {
                     logger.warn("Lease renewal failed for blob '{}' during processing — "
                             + "marking as failed to prevent duplicates", blobName);
                     stateTracker.markFailed(blobName, "lease renewal failed during processing");
-                    return new BlobResult(false, result.getEventCount());
+                    return new BlobResult(false, result.getEventCount(), blobName, durationMs);
                 } else {
                     stateTracker.markCompleted(blobName);
-                    return new BlobResult(true, result.getEventCount());
+                    return new BlobResult(true, result.getEventCount(), blobName, durationMs);
                 }
             } else {
                 stateTracker.markFailed(blobName, "interrupted");
-                return new BlobResult(false, result.getEventCount());
+                return new BlobResult(false, result.getEventCount(), blobName, durationMs);
             }
         } catch (Exception e) {
+            long durationMs = System.currentTimeMillis() - startMs;
             logger.warn("Failed to process blob {}: {}", blobName, e.getMessage());
             stateTracker.markFailed(blobName, e.getMessage());
-            return new BlobResult(false, 0);
+            return new BlobResult(false, 0, blobName, durationMs);
         } finally {
             stateTracker.release(blobName);
         }
     }
 
     /** Result of processing a single blob. */
-    private static class BlobResult {
+    static class BlobResult {
         final boolean success;
         final long events;
+        final String blobName;
+        final long durationMs;
 
-        BlobResult(boolean success, long events) {
+        BlobResult(boolean success, long events, String blobName, long durationMs) {
             this.success = success;
             this.events = events;
+            this.blobName = blobName;
+            this.durationMs = durationMs;
         }
     }
 

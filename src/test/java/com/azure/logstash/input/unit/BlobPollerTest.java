@@ -521,6 +521,11 @@ public class BlobPollerTest {
 
         when(processor.process(any(BlobClient.class), any(Consumer.class), any(Supplier.class)))
                 .thenAnswer(invocation -> {
+                    @SuppressWarnings("unchecked")
+                    Supplier<Boolean> stopped = (Supplier<Boolean>) invocation.getArgument(2);
+                    if (stopped.get()) {
+                        return new BlobProcessor.ProcessResult(0, false);
+                    }
                     processCount.incrementAndGet();
                     return new BlobProcessor.ProcessResult(10, true);
                 });
@@ -531,7 +536,7 @@ public class BlobPollerTest {
                 eventConsumer, "", 10, 1);  // concurrency=1 for deterministic order
         BlobPoller.PollCycleSummary summary = poller.pollOnce(stopAfterFirst);
 
-        // At least 1 blob should be processed, remaining marked failed/interrupted
-        assertTrue("At least 1 blob should be processed", summary.getBlobsProcessed() >= 1);
+        assertEquals("Exactly 1 blob should succeed", 1, summary.getBlobsProcessed());
+        assertEquals("Remaining 2 blobs should fail (interrupted)", 2, summary.getBlobsFailed());
     }
 }
