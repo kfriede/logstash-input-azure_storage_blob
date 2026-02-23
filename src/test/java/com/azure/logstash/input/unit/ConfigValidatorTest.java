@@ -6,6 +6,7 @@ import co.elastic.logstash.api.Configuration;
 import org.logstash.plugins.ConfigurationImpl;
 import org.junit.Test;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -292,5 +293,37 @@ public class ConfigValidatorTest {
         for (String w : warnings) {
             assertFalse("No daily_quota warning expected", w.contains("daily_quota"));
         }
+    }
+
+    // ── Exclude prefix overlap validation ─────────────────────────────────
+
+    @Test
+    public void testExcludePrefixWithoutOverlappingPrefixWarns() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("prefixes", Arrays.asList("logs/", "data/"));
+        raw.put("exclude_prefixes", Arrays.asList("archive/"));
+        List<String> warnings = ConfigValidator.validate(configFrom(raw));
+        assertTrue("Should warn about non-overlapping exclude prefix",
+                warnings.stream().anyMatch(w -> w.contains("archive/")
+                        && w.contains("exclude_prefix")));
+    }
+
+    @Test
+    public void testExcludePrefixOverlappingPrefixNoWarning() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("prefixes", Arrays.asList("logs/", "data/"));
+        raw.put("exclude_prefixes", Arrays.asList("logs/debug/"));
+        List<String> warnings = ConfigValidator.validate(configFrom(raw));
+        assertTrue("No exclude_prefix warning expected for overlapping prefix",
+                warnings.stream().noneMatch(w -> w.contains("exclude_prefix")));
+    }
+
+    @Test
+    public void testExcludePrefixWithEmptyPrefixesNoWarning() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("exclude_prefixes", Arrays.asList("archive/"));
+        List<String> warnings = ConfigValidator.validate(configFrom(raw));
+        assertTrue("No exclude_prefix warning when prefixes is empty",
+                warnings.stream().noneMatch(w -> w.contains("exclude_prefix")));
     }
 }
