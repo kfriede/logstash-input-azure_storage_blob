@@ -1,6 +1,7 @@
 docs/
 CLAUDE.md
 AGENTS.md
+.worktrees/
 
 # Gradle
 .gradle/
