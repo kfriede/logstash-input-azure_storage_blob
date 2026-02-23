@@ -243,10 +243,11 @@ public class AzureStorageBlob implements Input {
                 if (sleepMs > 0) {
                     long sleepSec = (sleepMs + 999) / 1000; // round up to nearest second
                     logger.info("Poll cycle complete: {} blobs processed, {} failed, "
-                                    + "{} skipped, {} events produced in {}ms. "
+                                    + "{} skipped, {} excluded, {} events produced in {}ms. "
                                     + "Next poll in {}s (at {}). Health: {}",
                             summary.getBlobsProcessed(), summary.getBlobsFailed(),
-                            summary.getBlobsSkipped(), summary.getEventsProduced(),
+                            summary.getBlobsSkipped(), summary.getBlobsExcluded(),
+                            summary.getEventsProduced(),
                             summary.getDurationMs(), sleepSec, nextPollTimestamp,
                             healthState.getState());
                     if (dailyQuotaBytes > 0) {
@@ -270,11 +271,12 @@ public class AzureStorageBlob implements Input {
                 } else {
                     long overrunSec = (-sleepMs + 999) / 1000; // round up
                     logger.info("Poll cycle complete: {} blobs processed, {} failed, "
-                                    + "{} skipped, {} events produced in {}ms. "
+                                    + "{} skipped, {} excluded, {} events produced in {}ms. "
                                     + "Batch exceeded poll rate, next poll was at {} ({}s ago), "
                                     + "starting immediately. Health: {}",
                             summary.getBlobsProcessed(), summary.getBlobsFailed(),
-                            summary.getBlobsSkipped(), summary.getEventsProduced(),
+                            summary.getBlobsSkipped(), summary.getBlobsExcluded(),
+                            summary.getEventsProduced(),
                             summary.getDurationMs(), nextPollTimestamp, overrunSec,
                             healthState.getState());
                     if (dailyQuotaBytes > 0) {
