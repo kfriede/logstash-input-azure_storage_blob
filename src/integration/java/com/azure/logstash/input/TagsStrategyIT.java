@@ -8,6 +8,7 @@ import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,7 +42,7 @@ public class TagsStrategyIT extends AzuriteTestBase {
                 containerClient, 15, 10, "test-host");
         BlobProcessor processor = new BlobProcessor(AZURITE_ACCOUNT, containerName, true);
         return new BlobPoller(containerClient, stateTracker, processor,
-                events::add, "", 50);
+                events::add, Collections.emptyList(), Collections.emptyList(), 50);
     }
 
     // ── Test 1: New blob gets processing then completed tags ────────────────

@@ -10,6 +10,7 @@ import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -45,15 +46,15 @@ public class BasicProcessingIT extends AzuriteTestBase {
     /**
      * Creates a BlobPoller using registry strategy (avoids Azurite tag/lease issues).
      */
-    private BlobPoller createPoller(String prefix, int batchSize) {
+    private BlobPoller createPoller(List<String> prefixes, int batchSize) {
         RegistryStateTracker stateTracker = new RegistryStateTracker(dbPath, "test-processor");
         BlobProcessor processor = new BlobProcessor(AZURITE_ACCOUNT, containerName, true);
         return new BlobPoller(containerClient, stateTracker, processor,
-                events::add, prefix, batchSize);
+                events::add, prefixes, Collections.emptyList(), batchSize);
     }
 
     private BlobPoller createPoller() {
-        return createPoller("", 50);
+        return createPoller(Collections.emptyList(), 50);
     }
 
     // ── Test 1: Single blob produces correct events ─────────────────────────
@@ -103,7 +104,7 @@ public class BasicProcessingIT extends AzuriteTestBase {
         uploadBlob(containerName, "logs/a.log", "log-line\n");
         uploadBlob(containerName, "data/b.log", "data-line\n");
 
-        BlobPoller poller = createPoller("logs/", 50);
+        BlobPoller poller = createPoller(Collections.singletonList("logs/"), 50);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(() -> false);
 
         assertEquals("Should process only 1 blob", 1, summary.getBlobsProcessed());
@@ -121,7 +122,7 @@ public class BasicProcessingIT extends AzuriteTestBase {
                     "line-" + i + "\n");
         }
 
-        BlobPoller poller = createPoller("", 3);
+        BlobPoller poller = createPoller(Collections.emptyList(), 3);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(() -> false);
 
         assertEquals("Should process at most 3 blobs", 3, summary.getBlobsProcessed());

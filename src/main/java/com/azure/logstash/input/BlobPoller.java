@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -63,7 +64,8 @@ public class BlobPoller {
     private final StateTracker stateTracker;
     private final BlobProcessor processor;
     private final Consumer<Map<String, Object>> eventConsumer;
-    private final String prefix;
+    private final List<String> prefixes;
+    private final List<String> excludePrefixes;
     private final int batchSize;
     private final int concurrency;
     private final long dailyQuotaBytes;
@@ -72,23 +74,26 @@ public class BlobPoller {
     /**
      * Creates a new BlobPoller with the specified concurrency level and daily quota.
      *
-     * @param containerClient the Azure container client for listing and accessing blobs
-     * @param stateTracker    tracks blob processing state (claim, complete, fail, release)
-     * @param processor       streams blob content and produces events
-     * @param eventConsumer   callback that receives each event map for Logstash queue
-     * @param prefix          blob name prefix filter (empty string means no filter)
-     * @param batchSize       maximum number of blobs to process per poll cycle
-     * @param concurrency     number of worker threads for parallel blob processing
-     * @param dailyQuotaBytes maximum bytes to process per UTC day (0 = unlimited)
+     * @param containerClient  the Azure container client for listing and accessing blobs
+     * @param stateTracker     tracks blob processing state (claim, complete, fail, release)
+     * @param processor        streams blob content and produces events
+     * @param eventConsumer    callback that receives each event map for Logstash queue
+     * @param prefixes         blob name prefix filters (empty list means no filter)
+     * @param excludePrefixes  blob name prefixes to exclude (client-side filter)
+     * @param batchSize        maximum number of blobs to process per poll cycle
+     * @param concurrency      number of worker threads for parallel blob processing
+     * @param dailyQuotaBytes  maximum bytes to process per UTC day (0 = unlimited)
      */
     public BlobPoller(BlobContainerClient containerClient, StateTracker stateTracker,
                       BlobProcessor processor, Consumer<Map<String, Object>> eventConsumer,
-                      String prefix, int batchSize, int concurrency, long dailyQuotaBytes) {
+                      List<String> prefixes, List<String> excludePrefixes,
+                      int batchSize, int concurrency, long dailyQuotaBytes) {
         this.containerClient = containerClient;
         this.stateTracker = stateTracker;
         this.processor = processor;
         this.eventConsumer = eventConsumer;
-        this.prefix = prefix;
+        this.prefixes = prefixes != null ? prefixes : Collections.emptyList();
+        this.excludePrefixes = excludePrefixes != null ? excludePrefixes : Collections.emptyList();
         this.batchSize = batchSize;
         this.concurrency = concurrency;
         this.dailyQuotaBytes = dailyQuotaBytes;
@@ -103,37 +108,41 @@ public class BlobPoller {
     /**
      * Creates a new BlobPoller with the specified concurrency level and no daily quota.
      *
-     * @param containerClient the Azure container client for listing and accessing blobs
-     * @param stateTracker    tracks blob processing state (claim, complete, fail, release)
-     * @param processor       streams blob content and produces events
-     * @param eventConsumer   callback that receives each event map for Logstash queue
-     * @param prefix          blob name prefix filter (empty string means no filter)
-     * @param batchSize       maximum number of blobs to process per poll cycle
-     * @param concurrency     number of worker threads for parallel blob processing
+     * @param containerClient  the Azure container client for listing and accessing blobs
+     * @param stateTracker     tracks blob processing state (claim, complete, fail, release)
+     * @param processor        streams blob content and produces events
+     * @param eventConsumer    callback that receives each event map for Logstash queue
+     * @param prefixes         blob name prefix filters (empty list means no filter)
+     * @param excludePrefixes  blob name prefixes to exclude (client-side filter)
+     * @param batchSize        maximum number of blobs to process per poll cycle
+     * @param concurrency      number of worker threads for parallel blob processing
      */
     public BlobPoller(BlobContainerClient containerClient, StateTracker stateTracker,
                       BlobProcessor processor, Consumer<Map<String, Object>> eventConsumer,
-                      String prefix, int batchSize, int concurrency) {
+                      List<String> prefixes, List<String> excludePrefixes,
+                      int batchSize, int concurrency) {
         this(containerClient, stateTracker, processor, eventConsumer,
-                prefix, batchSize, concurrency, 0L);
+                prefixes, excludePrefixes, batchSize, concurrency, 0L);
     }
 
     /**
      * Creates a new BlobPoller with default concurrency of 1 (sequential processing)
      * and no daily quota.
      *
-     * @param containerClient the Azure container client for listing and accessing blobs
-     * @param stateTracker    tracks blob processing state (claim, complete, fail, release)
-     * @param processor       streams blob content and produces events
-     * @param eventConsumer   callback that receives each event map for Logstash queue
-     * @param prefix          blob name prefix filter (empty string means no filter)
-     * @param batchSize       maximum number of blobs to process per poll cycle
+     * @param containerClient  the Azure container client for listing and accessing blobs
+     * @param stateTracker     tracks blob processing state (claim, complete, fail, release)
+     * @param processor        streams blob content and produces events
+     * @param eventConsumer    callback that receives each event map for Logstash queue
+     * @param prefixes         blob name prefix filters (empty list means no filter)
+     * @param excludePrefixes  blob name prefixes to exclude (client-side filter)
+     * @param batchSize        maximum number of blobs to process per poll cycle
      */
     public BlobPoller(BlobContainerClient containerClient, StateTracker stateTracker,
                       BlobProcessor processor, Consumer<Map<String, Object>> eventConsumer,
-                      String prefix, int batchSize) {
+                      List<String> prefixes, List<String> excludePrefixes,
+                      int batchSize) {
         this(containerClient, stateTracker, processor, eventConsumer,
-                prefix, batchSize, 1, 0L);
+                prefixes, excludePrefixes, batchSize, 1, 0L);
     }
 
     /**
@@ -154,83 +163,114 @@ public class BlobPoller {
         long bytesProcessedToday = 0;
         boolean quotaReached = false;
 
-        ListBlobsOptions options = new ListBlobsOptions();
-        if (prefix != null && !prefix.isEmpty()) {
-            options.setPrefix(prefix);
-        }
-        options.setMaxResultsPerPage(LISTING_PAGE_SIZE);
-        options.setDetails(new BlobListDetails().setRetrieveTags(true));
+        // Determine effective prefix list: empty list → single null (no filter)
+        List<String> effectivePrefixes = prefixes.isEmpty()
+                ? Collections.singletonList(null)
+                : prefixes;
 
-        for (PagedResponse<BlobItem> page :
-                containerClient.listBlobs(options, null).iterableByPage()) {
+        int blobsExcluded = 0;
 
-            if (claimedBlobs.size() >= batchSize || isStopped.get()) {
-                break;
-            }
-            if (quotaReached) {
+        for (String currentPrefix : effectivePrefixes) {
+            if (claimedBlobs.size() >= batchSize || isStopped.get() || quotaReached) {
                 break;
             }
 
-            // Accumulate quota from completed blobs on this page
-            if (today != null) {
-                for (BlobItem blob : page.getValue()) {
-                    if (isCompletedToday(blob.getTags(), today)) {
-                        Long size = (blob.getProperties() != null)
-                                ? blob.getProperties().getContentLength() : null;
-                        if (size != null) {
-                            bytesProcessedToday += size;
-                        }
-                    }
-                }
+            ListBlobsOptions options = new ListBlobsOptions();
+            if (currentPrefix != null) {
+                options.setPrefix(currentPrefix);
             }
+            options.setMaxResultsPerPage(LISTING_PAGE_SIZE);
+            options.setDetails(new BlobListDetails().setRetrieveTags(true));
 
-            List<BlobItem> candidates = stateTracker.filterCandidates(page.getValue());
-            blobsListed += page.getValue().size();
+            for (PagedResponse<BlobItem> page :
+                    containerClient.listBlobs(options, null).iterableByPage()) {
 
-            logger.debug("Page: {} blobs listed, {} candidates after filtering",
-                    page.getValue().size(), candidates.size());
-
-            for (BlobItem candidate : candidates) {
                 if (claimedBlobs.size() >= batchSize || isStopped.get()) {
                     break;
                 }
-
-                // Quota check: would this candidate exceed the daily quota?
-                if (today != null) {
-                    Long candidateSize = (candidate.getProperties() != null)
-                            ? candidate.getProperties().getContentLength() : null;
-                    long size = (candidateSize != null) ? candidateSize : 0L;
-                    if (bytesProcessedToday + size > dailyQuotaBytes) {
-                        quotaReached = true;
-                        logger.info("Daily quota reached: {} bytes processed today, "
-                                + "quota is {} bytes. Skipping remaining candidates.",
-                                bytesProcessedToday, dailyQuotaBytes);
-                        break;
-                    }
-                    // Pre-count toward running total
-                    bytesProcessedToday += size;
+                if (quotaReached) {
+                    break;
                 }
 
-                String blobName = candidate.getName();
-                if (stateTracker.claim(blobName)) {
-                    claimedBlobs.add(blobName);
+                // Accumulate quota from completed blobs on this page
+                if (today != null) {
+                    for (BlobItem blob : page.getValue()) {
+                        if (isCompletedToday(blob.getTags(), today)) {
+                            Long size = (blob.getProperties() != null)
+                                    ? blob.getProperties().getContentLength() : null;
+                            if (size != null) {
+                                bytesProcessedToday += size;
+                            }
+                        }
+                    }
+                }
+
+                // Apply exclusion filter before state tracker
+                List<BlobItem> pageBlobs = page.getValue();
+                blobsListed += pageBlobs.size();
+
+                List<BlobItem> includedBlobs;
+                if (excludePrefixes.isEmpty()) {
+                    includedBlobs = pageBlobs;
                 } else {
-                    logger.debug("Could not claim blob {}, skipping", blobName);
-                    blobsSkipped++;
+                    includedBlobs = new ArrayList<>();
+                    for (BlobItem blob : pageBlobs) {
+                        if (isExcluded(blob.getName())) {
+                            blobsExcluded++;
+                        } else {
+                            includedBlobs.add(blob);
+                        }
+                    }
+                }
+
+                List<BlobItem> candidates = stateTracker.filterCandidates(includedBlobs);
+
+                logger.debug("Page: {} blobs listed, {} excluded, {} candidates after filtering",
+                        pageBlobs.size(), pageBlobs.size() - includedBlobs.size(),
+                        candidates.size());
+
+                for (BlobItem candidate : candidates) {
+                    if (claimedBlobs.size() >= batchSize || isStopped.get()) {
+                        break;
+                    }
+
+                    // Quota check: would this candidate exceed the daily quota?
+                    if (today != null) {
+                        Long candidateSize = (candidate.getProperties() != null)
+                                ? candidate.getProperties().getContentLength() : null;
+                        long size = (candidateSize != null) ? candidateSize : 0L;
+                        if (bytesProcessedToday + size > dailyQuotaBytes) {
+                            quotaReached = true;
+                            logger.info("Daily quota reached: {} bytes processed today, "
+                                    + "quota is {} bytes. Skipping remaining candidates.",
+                                    bytesProcessedToday, dailyQuotaBytes);
+                            break;
+                        }
+                        // Pre-count toward running total
+                        bytesProcessedToday += size;
+                    }
+
+                    String blobName = candidate.getName();
+                    if (stateTracker.claim(blobName)) {
+                        claimedBlobs.add(blobName);
+                    } else {
+                        logger.debug("Could not claim blob {}, skipping", blobName);
+                        blobsSkipped++;
+                    }
                 }
             }
         }
 
         long discoveryMs = System.currentTimeMillis() - startTime;
-        logger.info("Discovery: {} blobs listed, {} candidates, {} claimed, {} skipped in {}.{}s",
-                blobsListed, claimedBlobs.size() + blobsSkipped,
+        logger.info("Discovery: {} blobs listed, {} excluded, {} candidates, {} claimed, {} skipped in {}.{}s",
+                blobsListed, blobsExcluded, claimedBlobs.size() + blobsSkipped,
                 claimedBlobs.size(), blobsSkipped,
                 discoveryMs / 1000, String.format("%01d", (discoveryMs % 1000) / 100));
 
         // Phase 2: Processing — process, mark, release (parallel)
         if (claimedBlobs.isEmpty()) {
             long durationMs = System.currentTimeMillis() - startTime;
-            return new PollCycleSummary(0, 0, blobsSkipped, 0, durationMs,
+            return new PollCycleSummary(0, 0, blobsSkipped, blobsExcluded, 0, durationMs,
                     bytesProcessedToday, quotaReached);
         }
 
@@ -290,7 +330,7 @@ public class BlobPoller {
         long durationMs = System.currentTimeMillis() - startTime;
 
         return new PollCycleSummary(blobsProcessed, blobsFailed, blobsSkipped,
-                eventsProduced, durationMs, bytesProcessedToday, quotaReached);
+                blobsExcluded, eventsProduced, durationMs, bytesProcessedToday, quotaReached);
     }
 
     /**
@@ -306,6 +346,18 @@ public class BlobPoller {
             Thread.currentThread().interrupt();
             logger.warn("Interrupted while waiting for BlobPoller thread pool shutdown");
         }
+    }
+
+    /**
+     * Checks if a blob name matches any of the exclude prefixes.
+     */
+    private boolean isExcluded(String blobName) {
+        for (String exc : excludePrefixes) {
+            if (blobName.startsWith(exc)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -388,26 +440,31 @@ public class BlobPoller {
         private final int blobsProcessed;
         private final int blobsFailed;
         private final int blobsSkipped;
+        private final int blobsExcluded;
         private final long eventsProduced;
         private final long durationMs;
         private final long bytesProcessedToday;
         private final boolean quotaReached;
 
         /**
-         * @param blobsProcessed     number of blobs successfully processed
-         * @param blobsFailed        number of blobs that failed during processing
-         * @param blobsSkipped       number of blobs skipped (claim failed)
-         * @param eventsProduced     total number of events produced across all blobs
-         * @param durationMs         wall-clock duration of the poll cycle in milliseconds
+         * Primary constructor with all fields including exclusion count.
+         *
+         * @param blobsProcessed      number of blobs successfully processed
+         * @param blobsFailed         number of blobs that failed during processing
+         * @param blobsSkipped        number of blobs skipped (claim failed)
+         * @param blobsExcluded       number of blobs excluded by exclude_prefixes filter
+         * @param eventsProduced      total number of events produced across all blobs
+         * @param durationMs          wall-clock duration of the poll cycle in milliseconds
          * @param bytesProcessedToday accumulated bytes from blobs completed today (UTC)
-         * @param quotaReached       true if the daily quota was reached during this cycle
+         * @param quotaReached        true if the daily quota was reached during this cycle
          */
         public PollCycleSummary(int blobsProcessed, int blobsFailed, int blobsSkipped,
-                                long eventsProduced, long durationMs,
+                                int blobsExcluded, long eventsProduced, long durationMs,
                                 long bytesProcessedToday, boolean quotaReached) {
             this.blobsProcessed = blobsProcessed;
             this.blobsFailed = blobsFailed;
             this.blobsSkipped = blobsSkipped;
+            this.blobsExcluded = blobsExcluded;
             this.eventsProduced = eventsProduced;
             this.durationMs = durationMs;
             this.bytesProcessedToday = bytesProcessedToday;
@@ -415,11 +472,21 @@ public class BlobPoller {
         }
 
         /**
-         * Backward-compatible constructor (no quota fields).
+         * Backward-compatible constructor (no exclusion count).
+         */
+        public PollCycleSummary(int blobsProcessed, int blobsFailed, int blobsSkipped,
+                                long eventsProduced, long durationMs,
+                                long bytesProcessedToday, boolean quotaReached) {
+            this(blobsProcessed, blobsFailed, blobsSkipped, 0, eventsProduced, durationMs,
+                    bytesProcessedToday, quotaReached);
+        }
+
+        /**
+         * Backward-compatible constructor (no quota fields, no exclusion count).
          */
         public PollCycleSummary(int blobsProcessed, int blobsFailed, int blobsSkipped,
                                 long eventsProduced, long durationMs) {
-            this(blobsProcessed, blobsFailed, blobsSkipped, eventsProduced, durationMs, 0, false);
+            this(blobsProcessed, blobsFailed, blobsSkipped, 0, eventsProduced, durationMs, 0, false);
         }
 
         /** Returns the number of blobs successfully processed. */
@@ -435,6 +502,11 @@ public class BlobPoller {
         /** Returns the number of blobs skipped (could not be claimed). */
         public int getBlobsSkipped() {
             return blobsSkipped;
+        }
+
+        /** Returns the number of blobs excluded by exclude_prefixes filter. */
+        public int getBlobsExcluded() {
+            return blobsExcluded;
         }
 
         /** Returns the total number of events produced across all blobs. */

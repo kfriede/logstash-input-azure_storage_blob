@@ -147,6 +147,30 @@ public final class ConfigValidator {
             }
         }
 
+        // ── Exclude prefix overlap validation ─────────────────────────────
+        @SuppressWarnings("unchecked")
+        List<Object> prefixes = config.get(PluginConfig.PREFIXES);
+        @SuppressWarnings("unchecked")
+        List<Object> excludePrefixes = config.get(PluginConfig.EXCLUDE_PREFIXES);
+
+        if (!prefixes.isEmpty() && !excludePrefixes.isEmpty()) {
+            for (Object excObj : excludePrefixes) {
+                String exc = String.valueOf(excObj);
+                boolean overlaps = false;
+                for (Object pfxObj : prefixes) {
+                    String pfx = String.valueOf(pfxObj);
+                    if (exc.startsWith(pfx)) {
+                        overlaps = true;
+                        break;
+                    }
+                }
+                if (!overlaps) {
+                    warnings.add("exclude_prefix '" + exc + "' does not start with any "
+                            + "entry in prefixes — it will never match any listed blobs");
+                }
+            }
+        }
+
         return warnings;
     }
 }

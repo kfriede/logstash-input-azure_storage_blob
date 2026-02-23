@@ -65,9 +65,9 @@ public class MultiConsumerIT extends AzuriteTestBase {
         BlobProcessor processor = new BlobProcessor(AZURITE_ACCOUNT, containerName, true);
 
         BlobPoller poller1 = new BlobPoller(containerClient, tracker1, processor,
-                events1::add, "", BLOB_COUNT);
+                events1::add, Collections.emptyList(), Collections.emptyList(), BLOB_COUNT);
         BlobPoller poller2 = new BlobPoller(containerClient, tracker2, processor,
-                events2::add, "", BLOB_COUNT);
+                events2::add, Collections.emptyList(), Collections.emptyList(), BLOB_COUNT);
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
         Future<BlobPoller.PollCycleSummary> future1 = executor.submit(() -> poller1.pollOnce(() -> false));
@@ -101,7 +101,7 @@ public class MultiConsumerIT extends AzuriteTestBase {
         BlobProcessor processor = new BlobProcessor(AZURITE_ACCOUNT, containerName, true);
 
         BlobPoller poller = new BlobPoller(containerClient, tracker, processor,
-                allEvents::add, "", BLOB_COUNT);
+                allEvents::add, Collections.emptyList(), Collections.emptyList(), BLOB_COUNT);
 
         BlobPoller.PollCycleSummary summary = poller.pollOnce(() -> false);
 
@@ -128,7 +128,7 @@ public class MultiConsumerIT extends AzuriteTestBase {
         BlobProcessor processor = new BlobProcessor(AZURITE_ACCOUNT, containerName, true);
 
         BlobPoller poller = new BlobPoller(containerClient, tracker, processor,
-                events::add, "", 50);
+                events::add, Collections.emptyList(), Collections.emptyList(), 50);
 
         // First poll processes all
         BlobPoller.PollCycleSummary first = poller.pollOnce(() -> false);

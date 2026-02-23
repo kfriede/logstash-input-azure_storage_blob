@@ -10,6 +10,7 @@ import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -44,7 +45,7 @@ public class MetricsIT extends AzuriteTestBase {
         RegistryStateTracker stateTracker = new RegistryStateTracker(dbPath, "test-host");
         BlobProcessor processor = new BlobProcessor(AZURITE_ACCOUNT, containerName, true);
         return new BlobPoller(containerClient, stateTracker, processor,
-                events::add, "", 50);
+                events::add, Collections.emptyList(), Collections.emptyList(), 50);
     }
 
     // ── Test 1: Blobs processed counter increments ──────────────────────────
