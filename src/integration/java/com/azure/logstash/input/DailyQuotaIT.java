@@ -6,6 +6,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -34,7 +35,8 @@ public class DailyQuotaIT extends AzuriteTestBase {
                 containerClient, 15, 10, "test-host");
         BlobProcessor processor = new BlobProcessor(AZURITE_ACCOUNT, containerName, true);
         return new BlobPoller(containerClient, stateTracker, processor,
-                events::add, "", 50, 1, dailyQuotaBytes);
+                events::add, Collections.emptyList(), Collections.emptyList(),
+                50, 1, dailyQuotaBytes);
     }
 
     // ── Test 1: Quota stops processing after limit ──────────────────────

@@ -6,6 +6,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -70,14 +71,14 @@ public class ContainerStrategyIT extends AzuriteTestBase {
     }
 
     private BlobPoller createPoller() {
-        return createPoller("");
+        return createPoller(Collections.emptyList());
     }
 
-    private BlobPoller createPoller(String prefix) {
+    private BlobPoller createPoller(List<String> prefixes) {
         ContainerStateTracker stateTracker = createNoLeaseTracker();
         BlobProcessor processor = new BlobProcessor(AZURITE_ACCOUNT, incomingName, true);
         return new BlobPoller(incomingClient, stateTracker, processor,
-                events::add, prefix, 50);
+                events::add, prefixes, Collections.emptyList(), 50);
     }
 
     // ── Test 1: Completed blob moved to archive ─────────────────────────────
