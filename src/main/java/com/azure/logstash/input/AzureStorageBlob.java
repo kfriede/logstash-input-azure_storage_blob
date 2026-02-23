@@ -4,6 +4,7 @@ import co.elastic.logstash.api.*;
 import com.azure.logstash.input.auth.CredentialFactory;
 import com.azure.logstash.input.config.ConfigValidator;
 import com.azure.logstash.input.config.PluginConfig;
+import com.azure.logstash.input.config.SizeParser;
 import com.azure.logstash.input.tracking.ContainerStateTracker;
 import com.azure.logstash.input.tracking.RegistryStateTracker;
 import com.azure.logstash.input.tracking.StateTracker;
@@ -62,6 +63,7 @@ public class AzureStorageBlob implements Input {
     private final boolean skipEmptyLines;
     private final long leaseDuration;
     private final long leaseRenewal;
+    private final long dailyQuotaBytes;
 
     // ── Wired components ───────────────────────────────────────────────────
     private final BlobContainerClient containerClient;
@@ -128,6 +130,10 @@ public class AzureStorageBlob implements Input {
         this.leaseDuration = config.get(PluginConfig.LEASE_DURATION);
         this.leaseRenewal = config.get(PluginConfig.LEASE_RENEWAL);
 
+        // Parse daily_quota
+        String dailyQuotaStr = config.get(PluginConfig.DAILY_QUOTA);
+        this.dailyQuotaBytes = SizeParser.parseBytes(dailyQuotaStr);
+
         // Validate and log warnings
         List<String> warnings = ConfigValidator.validate(config);
         for (String warning : warnings) {
@@ -172,6 +178,10 @@ public class AzureStorageBlob implements Input {
                 this.blobConcurrency,
                 this.authMethod, this.cloud.isEmpty() ? "(auto-detect)" : this.cloud,
                 hostname);
+        if (dailyQuotaBytes > 0) {
+            double quotaGB = dailyQuotaBytes / (1024.0 * 1024 * 1024);
+            logger.info("Daily quota enabled: {} GB", String.format("%.1f", quotaGB));
+        }
     }
 
     @Override
@@ -180,7 +190,7 @@ public class AzureStorageBlob implements Input {
         BlobPoller activePoller = this.poller;
         if (activePoller == null) {
             activePoller = new BlobPoller(containerClient, stateTracker, processor,
-                    consumer, prefix, (int) blobBatchSize, (int) blobConcurrency);
+                    consumer, prefix, (int) blobBatchSize, (int) blobConcurrency, dailyQuotaBytes);
         }
 
         try {
@@ -201,6 +211,13 @@ public class AzureStorageBlob implements Input {
                 metrics.addEventsProduced(summary.getEventsProduced());
                 metrics.setPollCycleDuration(summary.getDurationMs() / 1000.0);
 
+                // Update quota metrics
+                if (dailyQuotaBytes > 0) {
+                    metrics.setDailyQuotaBytesUsed(summary.getBytesProcessedToday());
+                    metrics.setDailyQuotaBytesLimit(dailyQuotaBytes);
+                    metrics.setDailyQuotaReached(summary.isQuotaReached());
+                }
+
                 // Update health state
                 healthState.recordPollResult(
                         summary.getBlobsProcessed(), summary.getBlobsFailed());
@@ -220,6 +237,21 @@ public class AzureStorageBlob implements Input {
                             summary.getBlobsSkipped(), summary.getEventsProduced(),
                             summary.getDurationMs(), sleepSec, nextPollTimestamp,
                             healthState.getState());
+                    if (dailyQuotaBytes > 0) {
+                        double usedGB = summary.getBytesProcessedToday() / (1024.0 * 1024 * 1024);
+                        double limitGB = dailyQuotaBytes / (1024.0 * 1024 * 1024);
+                        if (summary.isQuotaReached()) {
+                            logger.info("Daily quota reached: {} GB / {} GB. "
+                                    + "Pausing until UTC day rollover.",
+                                    String.format("%.1f", usedGB), String.format("%.1f", limitGB));
+                        } else {
+                            double pct = (summary.getBytesProcessedToday() * 100.0 / dailyQuotaBytes);
+                            logger.info("Quota: {} GB / {} GB ({}%)",
+                                    String.format("%.1f", usedGB),
+                                    String.format("%.1f", limitGB),
+                                    String.format("%.0f", pct));
+                        }
+                    }
                     if (!stopped) {
                         Thread.sleep(sleepMs);
                     }
@@ -233,6 +265,21 @@ public class AzureStorageBlob implements Input {
                             summary.getBlobsSkipped(), summary.getEventsProduced(),
                             summary.getDurationMs(), nextPollTimestamp, overrunSec,
                             healthState.getState());
+                    if (dailyQuotaBytes > 0) {
+                        double usedGB = summary.getBytesProcessedToday() / (1024.0 * 1024 * 1024);
+                        double limitGB = dailyQuotaBytes / (1024.0 * 1024 * 1024);
+                        if (summary.isQuotaReached()) {
+                            logger.info("Daily quota reached: {} GB / {} GB. "
+                                    + "Pausing until UTC day rollover.",
+                                    String.format("%.1f", usedGB), String.format("%.1f", limitGB));
+                        } else {
+                            double pct = (summary.getBytesProcessedToday() * 100.0 / dailyQuotaBytes);
+                            logger.info("Quota: {} GB / {} GB ({}%)",
+                                    String.format("%.1f", usedGB),
+                                    String.format("%.1f", limitGB),
+                                    String.format("%.0f", pct));
+                        }
+                    }
                 }
             }
         } catch (InterruptedException e) {
