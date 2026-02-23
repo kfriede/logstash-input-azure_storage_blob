@@ -92,11 +92,47 @@ public class BlobPollerTest {
     }
 
     // -----------------------------------------------------------------------
-    // Helper: create a BlobPoller with given prefix and batch size
+    // Helper: create a BlobPoller with given prefixes and batch size
     // -----------------------------------------------------------------------
-    private BlobPoller createPoller(String prefix, int batchSize) {
+    private BlobPoller createPoller(List<String> prefixes, int batchSize) {
         return new BlobPoller(containerClient, stateTracker, processor,
-                eventConsumer, prefix, batchSize);
+                eventConsumer, prefixes, Collections.emptyList(), batchSize);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper: create a BlobPoller with exclusions
+    // -----------------------------------------------------------------------
+    private BlobPoller createPollerWithExclusions(List<String> prefixes,
+            List<String> excludePrefixes, int batchSize) {
+        return new BlobPoller(containerClient, stateTracker, processor,
+                eventConsumer, prefixes, excludePrefixes, batchSize);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper: mock listBlobs to return different results per invocation
+    // -----------------------------------------------------------------------
+    @SuppressWarnings("unchecked")
+    private void mockListBlobsSequence(List<BlobItem>... blobSets) {
+        PagedIterable<BlobItem>[] iterables = new PagedIterable[blobSets.length];
+        for (int i = 0; i < blobSets.length; i++) {
+            PagedIterable<BlobItem> pi = mock(PagedIterable.class);
+            PagedResponse<BlobItem> page = mock(PagedResponse.class);
+            when(page.getValue()).thenReturn(blobSets[i]);
+            when(pi.iterableByPage())
+                    .thenReturn(new IterableStream<>(Collections.singletonList(page)));
+            iterables[i] = pi;
+        }
+
+        if (blobSets.length == 1) {
+            when(containerClient.listBlobs(any(ListBlobsOptions.class), any()))
+                    .thenReturn(iterables[0]);
+        } else {
+            // Build varargs array for thenReturn(first, rest...)
+            PagedIterable<BlobItem>[] rest = new PagedIterable[blobSets.length - 1];
+            System.arraycopy(iterables, 1, rest, 0, rest.length);
+            when(containerClient.listBlobs(any(ListBlobsOptions.class), any()))
+                    .thenReturn(iterables[0], rest);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -124,7 +160,7 @@ public class BlobPollerTest {
         // Mock getBlobClient for each blob
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(3, summary.getBlobsProcessed());
@@ -152,7 +188,7 @@ public class BlobPollerTest {
         mockProcessSuccess(3);
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        BlobPoller poller = createPoller("", 5);
+        BlobPoller poller = createPoller(Collections.emptyList(), 5);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(5, summary.getBlobsProcessed());
@@ -169,7 +205,7 @@ public class BlobPollerTest {
         mockListBlobs(Collections.emptyList());
         when(stateTracker.filterCandidates(any())).thenReturn(Collections.emptyList());
 
-        BlobPoller poller = createPoller("logs/2024/", 10);
+        BlobPoller poller = createPoller(Collections.singletonList("logs/2024/"), 10);
         poller.pollOnce(notStopped);
 
         ArgumentCaptor<ListBlobsOptions> optionsCaptor =
@@ -194,7 +230,7 @@ public class BlobPollerTest {
         mockProcessSuccess(5);
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(2, summary.getBlobsProcessed());
@@ -223,7 +259,7 @@ public class BlobPollerTest {
         when(processor.process(any(BlobClient.class), any(Consumer.class), any(Supplier.class)))
                 .thenThrow(new RuntimeException("disk full"));
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(0, summary.getBlobsProcessed());
@@ -246,7 +282,7 @@ public class BlobPollerTest {
         mockProcessSuccess(10);
         when(containerClient.getBlobClient("success.log")).thenReturn(mock(BlobClient.class));
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(1, summary.getBlobsProcessed());
@@ -267,12 +303,12 @@ public class BlobPollerTest {
         mockProcessSuccess(5);
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        // isStopped: false for page-level check and first blob, then true
-        // The paginated poller checks isStopped at the page level and before each blob
+        // isStopped: false for prefix-loop check, page-level check, and first blob, then true
+        // The poller checks isStopped at prefix loop, page loop, and before each candidate
         AtomicInteger checkCount = new AtomicInteger(0);
-        Supplier<Boolean> isStopped = () -> checkCount.incrementAndGet() > 2;
+        Supplier<Boolean> isStopped = () -> checkCount.incrementAndGet() > 3;
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(isStopped);
 
         assertEquals(1, summary.getBlobsProcessed());
@@ -296,7 +332,7 @@ public class BlobPollerTest {
         when(processor.process(any(BlobClient.class), any(Consumer.class), any(Supplier.class)))
                 .thenReturn(new BlobProcessor.ProcessResult(3, false));
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         // Should be counted as failed, not processed
@@ -318,7 +354,7 @@ public class BlobPollerTest {
         mockListBlobs(Collections.emptyList());
         when(stateTracker.filterCandidates(any())).thenReturn(Collections.emptyList());
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(0, summary.getBlobsProcessed());
@@ -343,7 +379,7 @@ public class BlobPollerTest {
         mockProcessSuccess(1);
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         poller.pollOnce(notStopped);
 
         // Verify processing follows API return order
@@ -369,7 +405,7 @@ public class BlobPollerTest {
         // Simulate lease renewal failure during processing
         when(stateTracker.wasLeaseRenewalFailed("compromised.log")).thenReturn(true);
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         // Should be counted as failed, not processed
@@ -399,7 +435,7 @@ public class BlobPollerTest {
         // No lease renewal failure
         when(stateTracker.wasLeaseRenewalFailed("healthy.log")).thenReturn(false);
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(1, summary.getBlobsProcessed());
@@ -432,7 +468,7 @@ public class BlobPollerTest {
                 .thenReturn(new BlobProcessor.ProcessResult(5, true))
                 .thenThrow(new RuntimeException("error"));
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(1, summary.getBlobsProcessed());
@@ -450,7 +486,7 @@ public class BlobPollerTest {
         mockListBlobs(Collections.emptyList());
         when(stateTracker.filterCandidates(any())).thenReturn(Collections.emptyList());
 
-        BlobPoller poller = createPoller("", 10);
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
         poller.pollOnce(notStopped);
         poller.close(); // should not throw
     }
@@ -469,7 +505,7 @@ public class BlobPollerTest {
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
         BlobPoller poller = new BlobPoller(containerClient, stateTracker, processor,
-                eventConsumer, "", 10, 3);
+                eventConsumer, Collections.emptyList(), Collections.emptyList(), 10, 3);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(3, summary.getBlobsProcessed());
@@ -501,7 +537,7 @@ public class BlobPollerTest {
                 .thenReturn(new BlobProcessor.ProcessResult(3, true));
 
         BlobPoller poller = new BlobPoller(containerClient, stateTracker, processor,
-                eventConsumer, "", 10, 3);
+                eventConsumer, Collections.emptyList(), Collections.emptyList(), 10, 3);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(2, summary.getBlobsProcessed());
@@ -538,7 +574,7 @@ public class BlobPollerTest {
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
         BlobPoller poller = new BlobPoller(containerClient, stateTracker, processor,
-                eventConsumer, "", 10, 1);  // concurrency=1 for deterministic order
+                eventConsumer, Collections.emptyList(), Collections.emptyList(), 10, 1, 0L);  // concurrency=1 for deterministic order
         BlobPoller.PollCycleSummary summary = poller.pollOnce(stopAfterFirst);
 
         assertEquals("Exactly 1 blob should succeed", 1, summary.getBlobsProcessed());
@@ -572,9 +608,9 @@ public class BlobPollerTest {
         return tags;
     }
 
-    private BlobPoller createPollerWithQuota(String prefix, int batchSize, long dailyQuotaBytes) {
+    private BlobPoller createPollerWithQuota(List<String> prefixes, int batchSize, long dailyQuotaBytes) {
         return new BlobPoller(containerClient, stateTracker, processor,
-                eventConsumer, prefix, batchSize, 1, dailyQuotaBytes);
+                eventConsumer, prefixes, Collections.emptyList(), batchSize, 1, dailyQuotaBytes);
     }
 
     // -----------------------------------------------------------------------
@@ -596,7 +632,7 @@ public class BlobPollerTest {
         mockProcessSuccess(5);
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        BlobPoller poller = createPollerWithQuota("", 10, 1200L);
+        BlobPoller poller = createPollerWithQuota(Collections.emptyList(), 10, 1200L);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(0, summary.getBlobsProcessed());
@@ -624,7 +660,7 @@ public class BlobPollerTest {
         mockProcessSuccess(5);
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        BlobPoller poller = createPollerWithQuota("", 10, 1000L);
+        BlobPoller poller = createPollerWithQuota(Collections.emptyList(), 10, 1000L);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(1, summary.getBlobsProcessed());
@@ -649,7 +685,7 @@ public class BlobPollerTest {
         mockProcessSuccess(5);
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        BlobPoller poller = createPollerWithQuota("", 10, 500L);
+        BlobPoller poller = createPollerWithQuota(Collections.emptyList(), 10, 500L);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(1, summary.getBlobsProcessed());
@@ -674,7 +710,7 @@ public class BlobPollerTest {
         mockProcessSuccess(5);
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        BlobPoller poller = createPollerWithQuota("", 10, 0L);
+        BlobPoller poller = createPollerWithQuota(Collections.emptyList(), 10, 0L);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(1, summary.getBlobsProcessed());
@@ -699,7 +735,7 @@ public class BlobPollerTest {
         mockProcessSuccess(5);
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        BlobPoller poller = createPollerWithQuota("", 10, 900L);
+        BlobPoller poller = createPollerWithQuota(Collections.emptyList(), 10, 900L);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(2, summary.getBlobsProcessed());
@@ -729,10 +765,162 @@ public class BlobPollerTest {
         mockProcessSuccess(5);
         when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
 
-        BlobPoller poller = createPollerWithQuota("", 10, 400L);
+        BlobPoller poller = createPollerWithQuota(Collections.emptyList(), 10, 400L);
         BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
 
         assertEquals(1, summary.getBlobsProcessed());
         assertFalse("Quota should not be reached", summary.isQuotaReached());
+    }
+
+    // -----------------------------------------------------------------------
+    // 23. testMultiplePrefixes — two prefixes, listBlobs called twice in order
+    // -----------------------------------------------------------------------
+    @Test
+    public void testMultiplePrefixes() throws IOException {
+        List<BlobItem> prefixABlobs = createBlobItems("a/one.log");
+        List<BlobItem> prefixBBlobs = createBlobItems("b/two.log");
+        mockListBlobsSequence(prefixABlobs, prefixBBlobs);
+
+        when(stateTracker.filterCandidates(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(1);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPoller(Arrays.asList("a/", "b/"), 10);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(2, summary.getBlobsProcessed());
+
+        // Verify listBlobs called twice with correct prefixes in order
+        ArgumentCaptor<ListBlobsOptions> captor =
+                ArgumentCaptor.forClass(ListBlobsOptions.class);
+        verify(containerClient, times(2)).listBlobs(captor.capture(), any());
+        assertEquals("a/", captor.getAllValues().get(0).getPrefix());
+        assertEquals("b/", captor.getAllValues().get(1).getPrefix());
+
+        // Verify claim order matches prefix order
+        InOrder inOrder = inOrder(stateTracker);
+        inOrder.verify(stateTracker).claim("a/one.log");
+        inOrder.verify(stateTracker).claim("b/two.log");
+    }
+
+    // -----------------------------------------------------------------------
+    // 24. testEmptyPrefixesList — empty list means no prefix filter
+    // -----------------------------------------------------------------------
+    @Test
+    public void testEmptyPrefixesList() throws IOException {
+        List<BlobItem> blobs = createBlobItems("any.log");
+        mockListBlobs(blobs);
+
+        when(stateTracker.filterCandidates(any())).thenReturn(blobs);
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(1);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPoller(Collections.emptyList(), 10);
+        poller.pollOnce(notStopped);
+
+        ArgumentCaptor<ListBlobsOptions> captor =
+                ArgumentCaptor.forClass(ListBlobsOptions.class);
+        verify(containerClient, times(1)).listBlobs(captor.capture(), any());
+        assertNull("No prefix should be set", captor.getValue().getPrefix());
+    }
+
+    // -----------------------------------------------------------------------
+    // 25. testExcludePrefixes — excluded blobs never reach state tracker
+    // -----------------------------------------------------------------------
+    @Test
+    public void testExcludePrefixes() throws IOException {
+        List<BlobItem> blobs = createBlobItems("logs/app.log", "logs/debug/trace.log", "logs/info.log");
+        mockListBlobs(blobs);
+
+        // filterCandidates should only see non-excluded blobs
+        when(stateTracker.filterCandidates(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(1);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPollerWithExclusions(
+                Collections.emptyList(),
+                Collections.singletonList("logs/debug/"),
+                10);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(2, summary.getBlobsProcessed());
+        assertEquals(1, summary.getBlobsExcluded());
+        // Verify debug blob never claimed
+        verify(stateTracker, never()).claim("logs/debug/trace.log");
+        verify(stateTracker).claim("logs/app.log");
+        verify(stateTracker).claim("logs/info.log");
+    }
+
+    // -----------------------------------------------------------------------
+    // 26. testExcludeWithPrefixesCombined — both work together
+    // -----------------------------------------------------------------------
+    @Test
+    public void testExcludeWithPrefixesCombined() throws IOException {
+        List<BlobItem> prefixABlobs = createBlobItems("a/keep.log", "a/skip/junk.log");
+        mockListBlobs(prefixABlobs);
+
+        when(stateTracker.filterCandidates(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(1);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPollerWithExclusions(
+                Collections.singletonList("a/"),
+                Collections.singletonList("a/skip/"),
+                10);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(1, summary.getBlobsProcessed());
+        assertEquals(1, summary.getBlobsExcluded());
+        verify(stateTracker).claim("a/keep.log");
+        verify(stateTracker, never()).claim("a/skip/junk.log");
+    }
+
+    // -----------------------------------------------------------------------
+    // 27. testBatchSizeSpansPrefixes — batch limit shared across prefixes
+    // -----------------------------------------------------------------------
+    @Test
+    public void testBatchSizeSpansPrefixes() throws IOException {
+        // 3 blobs in prefix a/, 3 in prefix b/, batch size = 4
+        List<BlobItem> prefixABlobs = createBlobItems("a/1.log", "a/2.log", "a/3.log");
+        List<BlobItem> prefixBBlobs = createBlobItems("b/1.log", "b/2.log", "b/3.log");
+        mockListBlobsSequence(prefixABlobs, prefixBBlobs);
+
+        when(stateTracker.filterCandidates(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(1);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPoller(Arrays.asList("a/", "b/"), 4);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        // 3 from a/ + 1 from b/ = 4 total
+        assertEquals(4, summary.getBlobsProcessed());
+        verify(stateTracker).claim("a/1.log");
+        verify(stateTracker).claim("a/2.log");
+        verify(stateTracker).claim("a/3.log");
+        verify(stateTracker).claim("b/1.log");
+        verify(stateTracker, never()).claim("b/2.log");
+        verify(stateTracker, never()).claim("b/3.log");
+    }
+
+    // -----------------------------------------------------------------------
+    // 28. testSinglePrefixInList — behaves same as old single prefix
+    // -----------------------------------------------------------------------
+    @Test
+    public void testSinglePrefixInList() throws IOException {
+        mockListBlobs(Collections.emptyList());
+        when(stateTracker.filterCandidates(any())).thenReturn(Collections.emptyList());
+
+        BlobPoller poller = createPoller(Collections.singletonList("logs/2024/"), 10);
+        poller.pollOnce(notStopped);
+
+        ArgumentCaptor<ListBlobsOptions> captor =
+                ArgumentCaptor.forClass(ListBlobsOptions.class);
+        verify(containerClient, times(1)).listBlobs(captor.capture(), any());
+        assertEquals("logs/2024/", captor.getValue().getPrefix());
     }
 }

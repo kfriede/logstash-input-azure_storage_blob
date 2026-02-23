@@ -57,7 +57,8 @@ public class AzureStorageBlob implements Input {
     private final String errorContainer;
     private final String registryPath;
     private final long pollInterval;
-    private final String prefix;
+    private final List<String> prefixes;
+    private final List<String> excludePrefixes;
     private final long blobBatchSize;
     private final long blobConcurrency;
     private final boolean skipEmptyLines;
@@ -116,7 +117,17 @@ public class AzureStorageBlob implements Input {
         this.errorContainer = config.get(PluginConfig.ERROR_CONTAINER);
         this.registryPath = config.get(PluginConfig.REGISTRY_PATH);
         this.pollInterval = config.get(PluginConfig.POLL_INTERVAL);
-        this.prefix = config.get(PluginConfig.PREFIX);
+        // Read array settings and cast List<Object> to List<String>
+        List<Object> rawPrefixes = config.get(PluginConfig.PREFIXES);
+        this.prefixes = new ArrayList<>();
+        for (Object o : rawPrefixes) {
+            this.prefixes.add(String.valueOf(o));
+        }
+        List<Object> rawExcludePrefixes = config.get(PluginConfig.EXCLUDE_PREFIXES);
+        this.excludePrefixes = new ArrayList<>();
+        for (Object o : rawExcludePrefixes) {
+            this.excludePrefixes.add(String.valueOf(o));
+        }
         this.blobBatchSize = config.get(PluginConfig.BLOB_BATCH_SIZE);
 
         // Read and apply blob_concurrency (forced to 1 for registry strategy)
@@ -171,10 +182,10 @@ public class AzureStorageBlob implements Input {
         // Log config summary
         logger.info("Azure Blob Storage input plugin initialized: "
                         + "storage_account={}, container={}, tracking_strategy={}, "
-                        + "poll_interval={}s, prefix='{}', blob_batch_size={}, "
+                        + "poll_interval={}s, prefixes={}, exclude_prefixes={}, blob_batch_size={}, "
                         + "blob_concurrency={}, auth_method={}, cloud={}, hostname={}",
                 this.storageAccount, this.container, this.trackingStrategy,
-                this.pollInterval, this.prefix, this.blobBatchSize,
+                this.pollInterval, this.prefixes, this.excludePrefixes, this.blobBatchSize,
                 this.blobConcurrency,
                 this.authMethod, this.cloud.isEmpty() ? "(auto-detect)" : this.cloud,
                 hostname);
@@ -190,7 +201,8 @@ public class AzureStorageBlob implements Input {
         BlobPoller activePoller = this.poller;
         if (activePoller == null) {
             activePoller = new BlobPoller(containerClient, stateTracker, processor,
-                    consumer, prefix, (int) blobBatchSize, (int) blobConcurrency, dailyQuotaBytes);
+                    consumer, prefixes, excludePrefixes,
+                    (int) blobBatchSize, (int) blobConcurrency, dailyQuotaBytes);
         }
 
         try {
