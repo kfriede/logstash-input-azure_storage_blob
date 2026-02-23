@@ -84,4 +84,37 @@ public class PluginMetricsTest {
         assertEquals(3, metrics.getActiveLeaseCount());
     }
 
+    // -----------------------------------------------------------------------
+    // 7. dailyQuotaBytesUsed — set, verify
+    // -----------------------------------------------------------------------
+    @Test
+    public void testDailyQuotaBytesUsed() {
+        PluginMetrics metrics = new PluginMetrics();
+        assertEquals(0L, metrics.getDailyQuotaBytesUsed());
+        metrics.setDailyQuotaBytesUsed(536870912000L);
+        assertEquals(536870912000L, metrics.getDailyQuotaBytesUsed());
+    }
+
+    // -----------------------------------------------------------------------
+    // 8. dailyQuotaBytesLimit — set, verify
+    // -----------------------------------------------------------------------
+    @Test
+    public void testDailyQuotaBytesLimit() {
+        PluginMetrics metrics = new PluginMetrics();
+        assertEquals(0L, metrics.getDailyQuotaBytesLimit());
+        metrics.setDailyQuotaBytesLimit(536870912000L);
+        assertEquals(536870912000L, metrics.getDailyQuotaBytesLimit());
+    }
+
+    // -----------------------------------------------------------------------
+    // 9. dailyQuotaReached — set, verify
+    // -----------------------------------------------------------------------
+    @Test
+    public void testDailyQuotaReached() {
+        PluginMetrics metrics = new PluginMetrics();
+        assertFalse(metrics.isDailyQuotaReached());
+        metrics.setDailyQuotaReached(true);
+        assertTrue(metrics.isDailyQuotaReached());
+    }
+
 }

@@ -19,6 +19,9 @@ public class PluginMetrics {
     private final AtomicLong eventsProduced = new AtomicLong();
     private volatile double pollCycleDuration;
     private final AtomicInteger activeLeaseCount = new AtomicInteger();
+    private final AtomicLong dailyQuotaBytesUsed = new AtomicLong();
+    private volatile long dailyQuotaBytesLimit;
+    private volatile boolean dailyQuotaReached;
 
     // -- Mutators -----------------------------------------------------------
 
@@ -46,6 +49,18 @@ public class PluginMetrics {
         activeLeaseCount.set(count);
     }
 
+    public void setDailyQuotaBytesUsed(long bytes) {
+        dailyQuotaBytesUsed.set(bytes);
+    }
+
+    public void setDailyQuotaBytesLimit(long bytes) {
+        this.dailyQuotaBytesLimit = bytes;
+    }
+
+    public void setDailyQuotaReached(boolean reached) {
+        this.dailyQuotaReached = reached;
+    }
+
     // -- Accessors ----------------------------------------------------------
 
     public long getBlobsProcessed() {
@@ -70,5 +85,17 @@ public class PluginMetrics {
 
     public int getActiveLeaseCount() {
         return activeLeaseCount.get();
+    }
+
+    public long getDailyQuotaBytesUsed() {
+        return dailyQuotaBytesUsed.get();
+    }
+
+    public long getDailyQuotaBytesLimit() {
+        return dailyQuotaBytesLimit;
+    }
+
+    public boolean isDailyQuotaReached() {
+        return dailyQuotaReached;
     }
 }
