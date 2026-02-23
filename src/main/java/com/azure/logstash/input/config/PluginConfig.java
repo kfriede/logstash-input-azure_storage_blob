@@ -77,9 +77,13 @@ public final class PluginConfig {
     public static final PluginConfigSpec<Long> POLL_INTERVAL =
             PluginConfigSpec.numSetting("poll_interval", 30);
 
-    /** Only process blobs whose name starts with this prefix. */
-    public static final PluginConfigSpec<String> PREFIX =
-            PluginConfigSpec.stringSetting("prefix", "");
+    /** Only list blobs under these prefixes (server-side). Empty list = entire container. */
+    public static final PluginConfigSpec<List<Object>> PREFIXES =
+            PluginConfigSpec.arraySetting("prefixes", Collections.emptyList(), false, false);
+
+    /** Skip blobs whose name starts with any of these prefixes (client-side). */
+    public static final PluginConfigSpec<List<Object>> EXCLUDE_PREFIXES =
+            PluginConfigSpec.arraySetting("exclude_prefixes", Collections.emptyList(), false, false);
 
     // ── Processing ─────────────────────────────────────────────────────────
 
@@ -128,7 +132,8 @@ public final class PluginConfig {
                     ERROR_CONTAINER,
                     REGISTRY_PATH,
                     POLL_INTERVAL,
-                    PREFIX,
+                    PREFIXES,
+                    EXCLUDE_PREFIXES,
                     BLOB_BATCH_SIZE,
                     BLOB_CONCURRENCY,
                     SKIP_EMPTY_LINES,
