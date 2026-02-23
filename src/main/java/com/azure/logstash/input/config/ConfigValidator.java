@@ -1,6 +1,7 @@
 package com.azure.logstash.input.config;
 
 import co.elastic.logstash.api.Configuration;
+import com.azure.logstash.input.config.SizeParser;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -130,6 +131,20 @@ public final class ConfigValidator {
         if ("registry".equals(strategy) && blobConcurrency > 1) {
             warnings.add("blob_concurrency is not supported with registry strategy "
                     + "(single-replica only), using 1");
+        }
+
+        // ── Daily quota validation ────────────────────────────────────────
+        String dailyQuota = config.get(PluginConfig.DAILY_QUOTA);
+        if (dailyQuota != null && !"0".equals(dailyQuota.trim())) {
+            // Validate the size string parses correctly (throws on invalid format)
+            SizeParser.parseBytes(dailyQuota);
+
+            // daily_quota only works with tags strategy
+            if (!"tags".equals(strategy)) {
+                throw new IllegalArgumentException(
+                        "daily_quota requires tracking_strategy='tags', "
+                                + "but tracking_strategy is '" + strategy + "'");
+            }
         }
 
         return warnings;

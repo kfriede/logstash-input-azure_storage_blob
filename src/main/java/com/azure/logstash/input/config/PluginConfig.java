@@ -95,6 +95,12 @@ public final class PluginConfig {
     public static final PluginConfigSpec<Boolean> SKIP_EMPTY_LINES =
             PluginConfigSpec.booleanSetting("skip_empty_lines", true);
 
+    // ── Quota ───────────────────────────────────────────────────────────
+
+    /** Daily processing quota as a human-readable size string. "0" = disabled. Tags strategy only. */
+    public static final PluginConfigSpec<String> DAILY_QUOTA =
+            PluginConfigSpec.stringSetting("daily_quota", "0");
+
     // ── Lease Coordination ─────────────────────────────────────────────────
 
     /** Lease duration in seconds. Azure requires 15-60. Used by tags and container strategies. */
@@ -126,6 +132,7 @@ public final class PluginConfig {
                     BLOB_BATCH_SIZE,
                     BLOB_CONCURRENCY,
                     SKIP_EMPTY_LINES,
+                    DAILY_QUOTA,
                     LEASE_DURATION,
                     LEASE_RENEWAL
             ));

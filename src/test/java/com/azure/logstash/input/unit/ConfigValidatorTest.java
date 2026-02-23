@@ -236,4 +236,61 @@ public class ConfigValidatorTest {
         raw.put("blob_concurrency", 0L);
         ConfigValidator.validate(configFrom(raw));
     }
+
+    // ── daily_quota validation ────────────────────────────────────────────
+
+    @Test
+    public void testDailyQuotaValidWithTagsStrategy() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("tracking_strategy", "tags");
+        raw.put("daily_quota", "500GB");
+        List<String> warnings = ConfigValidator.validate(configFrom(raw));
+        // Should not throw, no quota-related warnings
+        for (String w : warnings) {
+            assertFalse("No daily_quota warning expected", w.contains("daily_quota"));
+        }
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testDailyQuotaRejectedWithContainerStrategy() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("tracking_strategy", "container");
+        raw.put("daily_quota", "500GB");
+        ConfigValidator.validate(configFrom(raw));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testDailyQuotaRejectedWithRegistryStrategy() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("tracking_strategy", "registry");
+        raw.put("daily_quota", "500GB");
+        ConfigValidator.validate(configFrom(raw));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testDailyQuotaInvalidFormat() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("tracking_strategy", "tags");
+        raw.put("daily_quota", "notasize");
+        ConfigValidator.validate(configFrom(raw));
+    }
+
+    @Test
+    public void testDailyQuotaZeroIsDisabled() {
+        Map<String, Object> raw = minimalConfig();
+        raw.put("tracking_strategy", "tags");
+        raw.put("daily_quota", "0");
+        // Should not throw
+        ConfigValidator.validate(configFrom(raw));
+    }
+
+    @Test
+    public void testDailyQuotaDefaultNotSet() {
+        Map<String, Object> raw = minimalConfig();
+        // daily_quota not set — default "0", should pass with no issues
+        List<String> warnings = ConfigValidator.validate(configFrom(raw));
+        for (String w : warnings) {
+            assertFalse("No daily_quota warning expected", w.contains("daily_quota"));
+        }
+    }
 }
