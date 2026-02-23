@@ -10,6 +10,9 @@ import com.azure.storage.blob.models.ListBlobsOptions;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -63,10 +66,42 @@ public class BlobPoller {
     private final String prefix;
     private final int batchSize;
     private final int concurrency;
+    private final long dailyQuotaBytes;
     private final ExecutorService executor;
 
     /**
-     * Creates a new BlobPoller with the specified concurrency level.
+     * Creates a new BlobPoller with the specified concurrency level and daily quota.
+     *
+     * @param containerClient the Azure container client for listing and accessing blobs
+     * @param stateTracker    tracks blob processing state (claim, complete, fail, release)
+     * @param processor       streams blob content and produces events
+     * @param eventConsumer   callback that receives each event map for Logstash queue
+     * @param prefix          blob name prefix filter (empty string means no filter)
+     * @param batchSize       maximum number of blobs to process per poll cycle
+     * @param concurrency     number of worker threads for parallel blob processing
+     * @param dailyQuotaBytes maximum bytes to process per UTC day (0 = unlimited)
+     */
+    public BlobPoller(BlobContainerClient containerClient, StateTracker stateTracker,
+                      BlobProcessor processor, Consumer<Map<String, Object>> eventConsumer,
+                      String prefix, int batchSize, int concurrency, long dailyQuotaBytes) {
+        this.containerClient = containerClient;
+        this.stateTracker = stateTracker;
+        this.processor = processor;
+        this.eventConsumer = eventConsumer;
+        this.prefix = prefix;
+        this.batchSize = batchSize;
+        this.concurrency = concurrency;
+        this.dailyQuotaBytes = dailyQuotaBytes;
+        this.executor = Executors.newFixedThreadPool(concurrency, r -> {
+            Thread t = new Thread(r);
+            t.setName("azure-blob-worker-" + t.getId());
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    /**
+     * Creates a new BlobPoller with the specified concurrency level and no daily quota.
      *
      * @param containerClient the Azure container client for listing and accessing blobs
      * @param stateTracker    tracks blob processing state (claim, complete, fail, release)
@@ -79,23 +114,13 @@ public class BlobPoller {
     public BlobPoller(BlobContainerClient containerClient, StateTracker stateTracker,
                       BlobProcessor processor, Consumer<Map<String, Object>> eventConsumer,
                       String prefix, int batchSize, int concurrency) {
-        this.containerClient = containerClient;
-        this.stateTracker = stateTracker;
-        this.processor = processor;
-        this.eventConsumer = eventConsumer;
-        this.prefix = prefix;
-        this.batchSize = batchSize;
-        this.concurrency = concurrency;
-        this.executor = Executors.newFixedThreadPool(concurrency, r -> {
-            Thread t = new Thread(r);
-            t.setName("azure-blob-worker-" + t.getId());
-            t.setDaemon(true);
-            return t;
-        });
+        this(containerClient, stateTracker, processor, eventConsumer,
+                prefix, batchSize, concurrency, 0L);
     }
 
     /**
-     * Creates a new BlobPoller with default concurrency of 1 (sequential processing).
+     * Creates a new BlobPoller with default concurrency of 1 (sequential processing)
+     * and no daily quota.
      *
      * @param containerClient the Azure container client for listing and accessing blobs
      * @param stateTracker    tracks blob processing state (claim, complete, fail, release)
@@ -107,7 +132,8 @@ public class BlobPoller {
     public BlobPoller(BlobContainerClient containerClient, StateTracker stateTracker,
                       BlobProcessor processor, Consumer<Map<String, Object>> eventConsumer,
                       String prefix, int batchSize) {
-        this(containerClient, stateTracker, processor, eventConsumer, prefix, batchSize, 1);
+        this(containerClient, stateTracker, processor, eventConsumer,
+                prefix, batchSize, 1, 0L);
     }
 
     /**
@@ -124,6 +150,10 @@ public class BlobPoller {
         int blobsSkipped = 0;
         int blobsListed = 0;
 
+        LocalDate today = (dailyQuotaBytes > 0) ? LocalDate.now(ZoneOffset.UTC) : null;
+        long bytesProcessedToday = 0;
+        boolean quotaReached = false;
+
         ListBlobsOptions options = new ListBlobsOptions();
         if (prefix != null && !prefix.isEmpty()) {
             options.setPrefix(prefix);
@@ -137,6 +167,22 @@ public class BlobPoller {
             if (claimedBlobs.size() >= batchSize || isStopped.get()) {
                 break;
             }
+            if (quotaReached) {
+                break;
+            }
+
+            // Accumulate quota from completed blobs on this page
+            if (today != null) {
+                for (BlobItem blob : page.getValue()) {
+                    if (isCompletedToday(blob.getTags(), today)) {
+                        Long size = (blob.getProperties() != null)
+                                ? blob.getProperties().getContentLength() : null;
+                        if (size != null) {
+                            bytesProcessedToday += size;
+                        }
+                    }
+                }
+            }
 
             List<BlobItem> candidates = stateTracker.filterCandidates(page.getValue());
             blobsListed += page.getValue().size();
@@ -147,6 +193,22 @@ public class BlobPoller {
             for (BlobItem candidate : candidates) {
                 if (claimedBlobs.size() >= batchSize || isStopped.get()) {
                     break;
+                }
+
+                // Quota check: would this candidate exceed the daily quota?
+                if (today != null) {
+                    Long candidateSize = (candidate.getProperties() != null)
+                            ? candidate.getProperties().getContentLength() : null;
+                    long size = (candidateSize != null) ? candidateSize : 0L;
+                    if (bytesProcessedToday + size > dailyQuotaBytes) {
+                        quotaReached = true;
+                        logger.info("Daily quota reached: {} bytes processed today, "
+                                + "quota is {} bytes. Skipping remaining candidates.",
+                                bytesProcessedToday, dailyQuotaBytes);
+                        break;
+                    }
+                    // Pre-count toward running total
+                    bytesProcessedToday += size;
                 }
 
                 String blobName = candidate.getName();
@@ -168,7 +230,8 @@ public class BlobPoller {
         // Phase 2: Processing — process, mark, release (parallel)
         if (claimedBlobs.isEmpty()) {
             long durationMs = System.currentTimeMillis() - startTime;
-            return new PollCycleSummary(0, 0, blobsSkipped, 0, durationMs);
+            return new PollCycleSummary(0, 0, blobsSkipped, 0, durationMs,
+                    bytesProcessedToday, quotaReached);
         }
 
         // Build tasks
@@ -227,7 +290,7 @@ public class BlobPoller {
         long durationMs = System.currentTimeMillis() - startTime;
 
         return new PollCycleSummary(blobsProcessed, blobsFailed, blobsSkipped,
-                eventsProduced, durationMs);
+                eventsProduced, durationMs, bytesProcessedToday, quotaReached);
     }
 
     /**
@@ -242,6 +305,26 @@ public class BlobPoller {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.warn("Interrupted while waiting for BlobPoller thread pool shutdown");
+        }
+    }
+
+    /**
+     * Checks if a completed blob was processed today (UTC) by parsing
+     * the logstash_completed tag. Returns false for missing or malformed timestamps.
+     */
+    private static boolean isCompletedToday(Map<String, String> tags, LocalDate today) {
+        if (tags == null) return false;
+        String status = tags.get("logstash_status");
+        if (!"completed".equals(status)) return false;
+        String completedTs = tags.get("logstash_completed");
+        if (completedTs == null) return false;
+        try {
+            LocalDate completedDate = Instant.parse(completedTs)
+                    .atZone(ZoneOffset.UTC).toLocalDate();
+            return today.equals(completedDate);
+        } catch (Exception e) {
+            logger.debug("Skipping malformed logstash_completed tag '{}' on blob", completedTs);
+            return false;
         }
     }
 
@@ -307,21 +390,36 @@ public class BlobPoller {
         private final int blobsSkipped;
         private final long eventsProduced;
         private final long durationMs;
+        private final long bytesProcessedToday;
+        private final boolean quotaReached;
 
         /**
-         * @param blobsProcessed number of blobs successfully processed
-         * @param blobsFailed    number of blobs that failed during processing
-         * @param blobsSkipped   number of blobs skipped (claim failed)
-         * @param eventsProduced total number of events produced across all blobs
-         * @param durationMs     wall-clock duration of the poll cycle in milliseconds
+         * @param blobsProcessed     number of blobs successfully processed
+         * @param blobsFailed        number of blobs that failed during processing
+         * @param blobsSkipped       number of blobs skipped (claim failed)
+         * @param eventsProduced     total number of events produced across all blobs
+         * @param durationMs         wall-clock duration of the poll cycle in milliseconds
+         * @param bytesProcessedToday accumulated bytes from blobs completed today (UTC)
+         * @param quotaReached       true if the daily quota was reached during this cycle
          */
         public PollCycleSummary(int blobsProcessed, int blobsFailed, int blobsSkipped,
-                                long eventsProduced, long durationMs) {
+                                long eventsProduced, long durationMs,
+                                long bytesProcessedToday, boolean quotaReached) {
             this.blobsProcessed = blobsProcessed;
             this.blobsFailed = blobsFailed;
             this.blobsSkipped = blobsSkipped;
             this.eventsProduced = eventsProduced;
             this.durationMs = durationMs;
+            this.bytesProcessedToday = bytesProcessedToday;
+            this.quotaReached = quotaReached;
+        }
+
+        /**
+         * Backward-compatible constructor (no quota fields).
+         */
+        public PollCycleSummary(int blobsProcessed, int blobsFailed, int blobsSkipped,
+                                long eventsProduced, long durationMs) {
+            this(blobsProcessed, blobsFailed, blobsSkipped, eventsProduced, durationMs, 0, false);
         }
 
         /** Returns the number of blobs successfully processed. */
@@ -347,6 +445,16 @@ public class BlobPoller {
         /** Returns the wall-clock duration of the poll cycle in milliseconds. */
         public long getDurationMs() {
             return durationMs;
+        }
+
+        /** Returns the accumulated bytes from blobs completed today (UTC). */
+        public long getBytesProcessedToday() {
+            return bytesProcessedToday;
+        }
+
+        /** Returns true if the daily quota was reached during this poll cycle. */
+        public boolean isQuotaReached() {
+            return quotaReached;
         }
     }
 }

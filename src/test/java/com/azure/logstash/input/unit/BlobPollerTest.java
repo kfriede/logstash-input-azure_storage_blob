@@ -6,6 +6,7 @@ import com.azure.logstash.input.tracking.StateTracker;
 import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.models.BlobItem;
+import com.azure.storage.blob.models.BlobItemProperties;
 import com.azure.storage.blob.models.ListBlobsOptions;
 import com.azure.core.http.rest.PagedIterable;
 import com.azure.core.http.rest.PagedResponse;
@@ -17,9 +18,13 @@ import org.mockito.InOrder;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -538,5 +543,196 @@ public class BlobPollerTest {
 
         assertEquals("Exactly 1 blob should succeed", 1, summary.getBlobsProcessed());
         assertEquals("Remaining 2 blobs should fail (interrupted)", 2, summary.getBlobsFailed());
+    }
+
+    // -----------------------------------------------------------------------
+    // Quota helpers
+    // -----------------------------------------------------------------------
+
+    private BlobItem createBlobItemWithProps(String name, Map<String, String> tags, long contentLength) {
+        return new BlobItem()
+                .setName(name)
+                .setTags(tags)
+                .setProperties(new BlobItemProperties().setContentLength(contentLength));
+    }
+
+    private Map<String, String> completedTodayTags() {
+        Map<String, String> tags = new HashMap<>();
+        tags.put("logstash_status", "completed");
+        tags.put("logstash_completed", Instant.now().toString());
+        return tags;
+    }
+
+    private Map<String, String> completedYesterdayTags() {
+        Map<String, String> tags = new HashMap<>();
+        tags.put("logstash_status", "completed");
+        Instant yesterday = LocalDate.now(ZoneOffset.UTC).minusDays(1)
+                .atStartOfDay(ZoneOffset.UTC).toInstant();
+        tags.put("logstash_completed", yesterday.toString());
+        return tags;
+    }
+
+    private BlobPoller createPollerWithQuota(String prefix, int batchSize, long dailyQuotaBytes) {
+        return new BlobPoller(containerClient, stateTracker, processor,
+                eventConsumer, prefix, batchSize, 1, dailyQuotaBytes);
+    }
+
+    // -----------------------------------------------------------------------
+    // 17. testQuotaStopsClaimingWhenExceeded — stop claiming when quota would be exceeded
+    // -----------------------------------------------------------------------
+    @Test
+    public void testQuotaStopsClaimingWhenExceeded() throws IOException {
+        BlobItem done1 = createBlobItemWithProps("done1.log", completedTodayTags(), 500L);
+        BlobItem done2 = createBlobItemWithProps("done2.log", completedTodayTags(), 500L);
+        Map<String, String> noTags = new HashMap<>();
+        BlobItem candidate = createBlobItemWithProps("new.log", noTags, 500L);
+
+        List<BlobItem> allBlobs = Arrays.asList(done1, done2, candidate);
+        mockListBlobs(allBlobs);
+
+        when(stateTracker.filterCandidates(any()))
+                .thenReturn(Collections.singletonList(candidate));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(5);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPollerWithQuota("", 10, 1200L);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(0, summary.getBlobsProcessed());
+        assertTrue("Quota should be reached", summary.isQuotaReached());
+        assertTrue("Bytes processed today should be >= 1000",
+                summary.getBytesProcessedToday() >= 1000L);
+        verify(stateTracker, never()).claim(anyString());
+    }
+
+    // -----------------------------------------------------------------------
+    // 18. testQuotaAllowsProcessingWithinLimit — candidate fits within quota
+    // -----------------------------------------------------------------------
+    @Test
+    public void testQuotaAllowsProcessingWithinLimit() throws IOException {
+        BlobItem done1 = createBlobItemWithProps("done1.log", completedTodayTags(), 300L);
+        Map<String, String> noTags = new HashMap<>();
+        BlobItem candidate = createBlobItemWithProps("new.log", noTags, 200L);
+
+        List<BlobItem> allBlobs = Arrays.asList(done1, candidate);
+        mockListBlobs(allBlobs);
+
+        when(stateTracker.filterCandidates(any()))
+                .thenReturn(Collections.singletonList(candidate));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(5);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPollerWithQuota("", 10, 1000L);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(1, summary.getBlobsProcessed());
+        assertFalse("Quota should not be reached", summary.isQuotaReached());
+    }
+
+    // -----------------------------------------------------------------------
+    // 19. testQuotaIgnoresYesterdayBlobs — yesterday's completed blobs don't count
+    // -----------------------------------------------------------------------
+    @Test
+    public void testQuotaIgnoresYesterdayBlobs() throws IOException {
+        BlobItem yesterday = createBlobItemWithProps("old.log", completedYesterdayTags(), 900L);
+        Map<String, String> noTags = new HashMap<>();
+        BlobItem candidate = createBlobItemWithProps("new.log", noTags, 200L);
+
+        List<BlobItem> allBlobs = Arrays.asList(yesterday, candidate);
+        mockListBlobs(allBlobs);
+
+        when(stateTracker.filterCandidates(any()))
+                .thenReturn(Collections.singletonList(candidate));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(5);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPollerWithQuota("", 10, 500L);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(1, summary.getBlobsProcessed());
+        assertFalse("Quota should not be reached", summary.isQuotaReached());
+    }
+
+    // -----------------------------------------------------------------------
+    // 20. testQuotaDisabledZero — quota disabled (0) — no enforcement
+    // -----------------------------------------------------------------------
+    @Test
+    public void testQuotaDisabledZero() throws IOException {
+        BlobItem done1 = createBlobItemWithProps("done1.log", completedTodayTags(), 999999L);
+        Map<String, String> noTags = new HashMap<>();
+        BlobItem candidate = createBlobItemWithProps("new.log", noTags, 100L);
+
+        List<BlobItem> allBlobs = Arrays.asList(done1, candidate);
+        mockListBlobs(allBlobs);
+
+        when(stateTracker.filterCandidates(any()))
+                .thenReturn(Collections.singletonList(candidate));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(5);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPollerWithQuota("", 10, 0L);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(1, summary.getBlobsProcessed());
+        assertFalse("Quota should not be reached when disabled", summary.isQuotaReached());
+    }
+
+    // -----------------------------------------------------------------------
+    // 21. testQuotaPartialBatch — first 2 candidates fit, third exceeds
+    // -----------------------------------------------------------------------
+    @Test
+    public void testQuotaPartialBatch() throws IOException {
+        Map<String, String> noTags = new HashMap<>();
+        BlobItem candidate1 = createBlobItemWithProps("a.log", noTags, 400L);
+        BlobItem candidate2 = createBlobItemWithProps("b.log", noTags, 400L);
+        BlobItem candidate3 = createBlobItemWithProps("c.log", noTags, 400L);
+
+        List<BlobItem> allBlobs = Arrays.asList(candidate1, candidate2, candidate3);
+        mockListBlobs(allBlobs);
+
+        when(stateTracker.filterCandidates(any())).thenReturn(allBlobs);
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(5);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPollerWithQuota("", 10, 900L);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(2, summary.getBlobsProcessed());
+        assertTrue("Quota should be reached", summary.isQuotaReached());
+        verify(stateTracker, times(2)).claim(anyString());
+    }
+
+    // -----------------------------------------------------------------------
+    // 22. testQuotaMalformedTimestampSkipped — malformed timestamp gracefully skipped
+    // -----------------------------------------------------------------------
+    @Test
+    public void testQuotaMalformedTimestampSkipped() throws IOException {
+        Map<String, String> badTags = new HashMap<>();
+        badTags.put("logstash_status", "completed");
+        badTags.put("logstash_completed", "not-a-timestamp");
+        BlobItem badBlob = createBlobItemWithProps("bad.log", badTags, 500L);
+
+        Map<String, String> noTags = new HashMap<>();
+        BlobItem candidate = createBlobItemWithProps("new.log", noTags, 200L);
+
+        List<BlobItem> allBlobs = Arrays.asList(badBlob, candidate);
+        mockListBlobs(allBlobs);
+
+        when(stateTracker.filterCandidates(any()))
+                .thenReturn(Collections.singletonList(candidate));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(5);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPollerWithQuota("", 10, 400L);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(1, summary.getBlobsProcessed());
+        assertFalse("Quota should not be reached", summary.isQuotaReached());
     }
 }
