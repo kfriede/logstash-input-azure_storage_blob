@@ -923,4 +923,142 @@ public class BlobPollerTest {
         verify(containerClient, times(1)).listBlobs(captor.capture(), any());
         assertEquals("logs/2024/", captor.getValue().getPrefix());
     }
+
+    // -----------------------------------------------------------------------
+    // Helper: mock listBlobs to return multiple pages within a single call
+    // -----------------------------------------------------------------------
+    @SuppressWarnings("unchecked")
+    private void mockListBlobsMultiPage(List<BlobItem>... pages) {
+        PagedIterable<BlobItem> pagedIterable = mock(PagedIterable.class);
+
+        List<PagedResponse<BlobItem>> pageResponses = new ArrayList<>();
+        for (List<BlobItem> pageItems : pages) {
+            PagedResponse<BlobItem> pageResp = mock(PagedResponse.class);
+            when(pageResp.getValue()).thenReturn(pageItems);
+            pageResponses.add(pageResp);
+        }
+
+        when(pagedIterable.iterableByPage())
+                .thenReturn(new IterableStream<>(pageResponses));
+
+        when(containerClient.listBlobs(any(ListBlobsOptions.class), any()))
+                .thenReturn(pagedIterable);
+    }
+
+    // -----------------------------------------------------------------------
+    // 29. testQuotaScansAllPagesEvenWhenBatchFull — batch fills on page 1,
+    //     page 2's completed-today blob still counted in quota total
+    // -----------------------------------------------------------------------
+    @Test
+    public void testQuotaScansAllPagesEvenWhenBatchFull() throws IOException {
+        Map<String, String> noTags = new HashMap<>();
+        BlobItem candidate = createBlobItemWithProps("new.log", noTags, 100L);
+        BlobItem done = createBlobItemWithProps("done.log", completedTodayTags(), 500L);
+
+        mockListBlobsMultiPage(
+                Collections.singletonList(candidate),
+                Collections.singletonList(done));
+
+        when(stateTracker.filterCandidates(any()))
+                .thenReturn(Collections.singletonList(candidate));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(1);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        // batch=1, quota=10000 (high enough to not be reached)
+        BlobPoller poller = createPollerWithQuota(Collections.emptyList(), 1, 10000L);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(1, summary.getBlobsProcessed());
+        // bytesProcessedToday = 100 (pre-count for candidate) + 500 (done blob) = 600
+        assertEquals("Page 2's completed blob must be included in quota total",
+                600L, summary.getBytesProcessedToday());
+    }
+
+    // -----------------------------------------------------------------------
+    // 30. testQuotaScansAllPrefixesEvenWhenBatchFull — batch fills in prefix a/,
+    //     prefix b/'s completed blob still counted in quota total
+    // -----------------------------------------------------------------------
+    @Test
+    public void testQuotaScansAllPrefixesEvenWhenBatchFull() throws IOException {
+        Map<String, String> noTags = new HashMap<>();
+        BlobItem candidate = createBlobItemWithProps("a/new.log", noTags, 100L);
+        BlobItem done = createBlobItemWithProps("b/done.log", completedTodayTags(), 700L);
+
+        mockListBlobsSequence(
+                Collections.singletonList(candidate),
+                Collections.singletonList(done));
+
+        when(stateTracker.filterCandidates(any()))
+                .thenReturn(Collections.singletonList(candidate));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(1);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        BlobPoller poller = createPollerWithQuota(Arrays.asList("a/", "b/"), 1, 10000L);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(1, summary.getBlobsProcessed());
+        // bytesProcessedToday = 100 (pre-count for candidate) + 700 (done blob) = 800
+        assertEquals("Prefix b/'s completed blob must be included in quota total",
+                800L, summary.getBytesProcessedToday());
+    }
+
+    // -----------------------------------------------------------------------
+    // 31. testQuotaReachedOnLaterPageStillReportsFullTotal — quota hit on page 2,
+    //     page 3's completed blob still counted in total
+    // -----------------------------------------------------------------------
+    @Test
+    public void testQuotaReachedOnLaterPageStillReportsFullTotal() throws IOException {
+        Map<String, String> noTags = new HashMap<>();
+        BlobItem done1 = createBlobItemWithProps("done1.log", completedTodayTags(), 500L);
+        BlobItem candidate = createBlobItemWithProps("new.log", noTags, 600L);
+        BlobItem done2 = createBlobItemWithProps("done2.log", completedTodayTags(), 300L);
+        BlobItem done3 = createBlobItemWithProps("done3.log", completedTodayTags(), 400L);
+
+        mockListBlobsMultiPage(
+                Arrays.asList(done1, candidate),
+                Collections.singletonList(done2),
+                Collections.singletonList(done3));
+
+        when(stateTracker.filterCandidates(any()))
+                .thenReturn(Collections.singletonList(candidate));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(1);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        // quota=1000 — candidate (600) would push past 500+600=1100
+        BlobPoller poller = createPollerWithQuota(Collections.emptyList(), 10, 1000L);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertTrue("Quota should be reached", summary.isQuotaReached());
+        assertEquals(0, summary.getBlobsProcessed());
+        // All three pages' completed blobs: 500 + 300 + 400 = 1200
+        assertEquals("All pages scanned for quota total",
+                1200L, summary.getBytesProcessedToday());
+    }
+
+    // -----------------------------------------------------------------------
+    // 32. testNonQuotaBatchBreakStillExitsEarly — no quota, batch=1,
+    //     only first prefix listed (perf safeguard)
+    // -----------------------------------------------------------------------
+    @Test
+    public void testNonQuotaBatchBreakStillExitsEarly() throws IOException {
+        List<BlobItem> prefixABlobs = createBlobItems("a/one.log");
+        List<BlobItem> prefixBBlobs = createBlobItems("b/two.log");
+        mockListBlobsSequence(prefixABlobs, prefixBBlobs);
+
+        when(stateTracker.filterCandidates(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(stateTracker.claim(anyString())).thenReturn(true);
+        mockProcessSuccess(1);
+        when(containerClient.getBlobClient(anyString())).thenReturn(mock(BlobClient.class));
+
+        // No quota (0), batch=1
+        BlobPoller poller = createPoller(Arrays.asList("a/", "b/"), 1);
+        BlobPoller.PollCycleSummary summary = poller.pollOnce(notStopped);
+
+        assertEquals(1, summary.getBlobsProcessed());
+        // Only first prefix should be listed (early exit when batch full and no quota)
+        verify(containerClient, times(1)).listBlobs(any(ListBlobsOptions.class), any());
+    }
 }

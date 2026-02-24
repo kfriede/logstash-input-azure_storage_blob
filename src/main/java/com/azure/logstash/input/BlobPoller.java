@@ -171,7 +171,10 @@ public class BlobPoller {
         int blobsExcluded = 0;
 
         for (String currentPrefix : effectivePrefixes) {
-            if (claimedBlobs.size() >= batchSize || isStopped.get() || quotaReached) {
+            if (isStopped.get()) {
+                break;
+            }
+            if (today == null && claimedBlobs.size() >= batchSize) {
                 break;
             }
 
@@ -185,10 +188,10 @@ public class BlobPoller {
             for (PagedResponse<BlobItem> page :
                     containerClient.listBlobs(options, null).iterableByPage()) {
 
-                if (claimedBlobs.size() >= batchSize || isStopped.get()) {
+                if (isStopped.get()) {
                     break;
                 }
-                if (quotaReached) {
+                if (today == null && claimedBlobs.size() >= batchSize) {
                     break;
                 }
 
@@ -205,57 +208,60 @@ public class BlobPoller {
                     }
                 }
 
-                // Apply exclusion filter before state tracker
                 List<BlobItem> pageBlobs = page.getValue();
                 blobsListed += pageBlobs.size();
 
-                List<BlobItem> includedBlobs;
-                if (excludePrefixes.isEmpty()) {
-                    includedBlobs = pageBlobs;
-                } else {
-                    includedBlobs = new ArrayList<>();
-                    for (BlobItem blob : pageBlobs) {
-                        if (isExcluded(blob.getName())) {
-                            blobsExcluded++;
-                        } else {
-                            includedBlobs.add(blob);
+                // Only filter and claim when batch is not full and quota not reached
+                if (claimedBlobs.size() < batchSize && !quotaReached) {
+                    // Apply exclusion filter before state tracker
+                    List<BlobItem> includedBlobs;
+                    if (excludePrefixes.isEmpty()) {
+                        includedBlobs = pageBlobs;
+                    } else {
+                        includedBlobs = new ArrayList<>();
+                        for (BlobItem blob : pageBlobs) {
+                            if (isExcluded(blob.getName())) {
+                                blobsExcluded++;
+                            } else {
+                                includedBlobs.add(blob);
+                            }
                         }
                     }
-                }
 
-                List<BlobItem> candidates = stateTracker.filterCandidates(includedBlobs);
+                    List<BlobItem> candidates = stateTracker.filterCandidates(includedBlobs);
 
-                logger.debug("Page: {} blobs listed, {} excluded, {} candidates after filtering",
-                        pageBlobs.size(), pageBlobs.size() - includedBlobs.size(),
-                        candidates.size());
+                    logger.debug("Page: {} blobs listed, {} excluded, {} candidates after filtering",
+                            pageBlobs.size(), pageBlobs.size() - includedBlobs.size(),
+                            candidates.size());
 
-                for (BlobItem candidate : candidates) {
-                    if (claimedBlobs.size() >= batchSize || isStopped.get()) {
-                        break;
-                    }
-
-                    // Quota check: would this candidate exceed the daily quota?
-                    if (today != null) {
-                        Long candidateSize = (candidate.getProperties() != null)
-                                ? candidate.getProperties().getContentLength() : null;
-                        long size = (candidateSize != null) ? candidateSize : 0L;
-                        if (bytesProcessedToday + size > dailyQuotaBytes) {
-                            quotaReached = true;
-                            logger.info("Daily quota reached: {} bytes processed today, "
-                                    + "quota is {} bytes. Skipping remaining candidates.",
-                                    bytesProcessedToday, dailyQuotaBytes);
+                    for (BlobItem candidate : candidates) {
+                        if (claimedBlobs.size() >= batchSize || isStopped.get()) {
                             break;
                         }
-                        // Pre-count toward running total
-                        bytesProcessedToday += size;
-                    }
 
-                    String blobName = candidate.getName();
-                    if (stateTracker.claim(blobName)) {
-                        claimedBlobs.add(blobName);
-                    } else {
-                        logger.debug("Could not claim blob {}, skipping", blobName);
-                        blobsSkipped++;
+                        // Quota check: would this candidate exceed the daily quota?
+                        if (today != null) {
+                            Long candidateSize = (candidate.getProperties() != null)
+                                    ? candidate.getProperties().getContentLength() : null;
+                            long size = (candidateSize != null) ? candidateSize : 0L;
+                            if (bytesProcessedToday + size > dailyQuotaBytes) {
+                                quotaReached = true;
+                                logger.info("Daily quota reached: {} bytes processed today, "
+                                        + "quota is {} bytes. Skipping remaining candidates.",
+                                        bytesProcessedToday, dailyQuotaBytes);
+                                break;
+                            }
+                            // Pre-count toward running total
+                            bytesProcessedToday += size;
+                        }
+
+                        String blobName = candidate.getName();
+                        if (stateTracker.claim(blobName)) {
+                            claimedBlobs.add(blobName);
+                        } else {
+                            logger.debug("Could not claim blob {}, skipping", blobName);
+                            blobsSkipped++;
+                        }
                     }
                 }
             }
