@@ -55,6 +55,11 @@ jobs:
       - name: Rename gem to stable filename
         run: cp logstash-input-azure_storage_blob-*-java.gem logstash-input-azure_storage_blob-dev-java.gem
 
+      - name: Move dev tag to current commit
+        run: |
+          git tag -f dev
+          git push origin dev --force
+
       - name: Publish to dev release
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
         with:
